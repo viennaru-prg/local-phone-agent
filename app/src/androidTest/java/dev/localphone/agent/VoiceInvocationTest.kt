@@ -60,6 +60,7 @@ class VoiceInvocationTest {
         device.executeShellCommand("pm grant ${context.packageName} ${Manifest.permission.RECORD_AUDIO}")
         graph.settings.put("voice_onboarded", "yes"); graph.settings.put("use_functiongemma", "")
         graph.settings.put("verified_native_speech", "")
+        graph.settings.put("stt_focus_mode", "")
         graph.settings.put("music_package", context.packageName)
         graph.settings.put("voice_haptics", "no")
         fake = FakeSpeech(); graph.speechFactoryOverride = { fake }
@@ -156,6 +157,29 @@ class VoiceInvocationTest {
         assertNotNull(device.findObject(androidx.test.uiautomator.By.text("목적지: PreviousMap")))
         SystemClock.sleep(300)
         assertEquals(0, plays.get()); assertEquals(PlaybackState.STATE_PAUSED, session!!.controller.playbackState?.state)
+    }
+    @Test fun structuredPartialsNeverDispatchAndFinalKeepsEveryHypothesis() {
+        media(); openMap(); launch()
+        val speech = SpeechRecognitionResult(listOf(SpeechHypothesis("다음 곡", .90f, 0),
+            SpeechHypothesis("다음곡", .88f, 1)), engine = "INSTRUMENTATION_NBEST", onDevice = true)
+        feed { it.onRecognition(speech.copy(finalResult = false)) }
+        SystemClock.sleep(150)
+        assertEquals(0, skips.get()); assertEquals(InvocationState.LISTENING, entry!!.coordinator!!.state)
+        feed { it.onRecognition(speech) }
+        result(InvocationState.SUCCESS); await { assertEquals(1, skips.get()) }
+        assertEquals(2, graph.invocationDebug.last!!.speech!!.recognition.hypotheses.size)
+        assertEquals(.90f, graph.invocationDebug.last!!.speech!!.resolution.confidence!!, .0001f)
+    }
+    @Test fun competingMediaHypothesesNeedOneVoiceChoiceBeforeAnyAction() {
+        media(); openMap(); launch()
+        feed { it.onRecognition(SpeechRecognitionResult(listOf(SpeechHypothesis("노래 멈춰", .70f, 0),
+            SpeechHypothesis("노래 틀어", .68f, 1)), engine = "INSTRUMENTATION_NBEST", onDevice = true)) }
+        await { assertEquals(2, fake.starts.get()); assertEquals(InvocationState.LISTENING, entry!!.coordinator!!.state) }
+        assertEquals(0, pauses.get()); assertEquals(0, plays.get())
+        feed { it.onRecognition(SpeechRecognitionResult(listOf(SpeechHypothesis("노래 멈춰", .95f, 0)),
+            engine = "INSTRUMENTATION_NBEST", onDevice = true)) }
+        result(InvocationState.SUCCESS); await { assertEquals(1, pauses.get()) }
+        assertEquals(0, plays.get()); assertEquals(2, fake.starts.get())
     }
     @Test fun navigationWithoutUiCapabilityReportsUnconfirmedCompletionAndKeepsMapFront() {
         media()
@@ -265,7 +289,8 @@ class VoiceInvocationTest {
     @Test fun actualMicrophoneSilenceEndsWithoutAnyToolRequest() {
         val cleared = CountDownLatch(1); graph.speechModel.releaseForTest { cleared.countDown() }
         assertTrue(cleared.await(15, TimeUnit.SECONDS))
-        graph.speechFactoryOverride = null
+        // The dedicated AVD has no Korean native model; this test explicitly exercises the retained baseline.
+        graph.speechFactoryOverride = { LocalSpeechInput(graph.speechModel) }
         openMap(); launch(waitForListening = false)
         await(45000) { assertEquals(entry?.coordinator?.sessionId, graph.invocationDebug.last?.sessionId)
             assertEquals(InvocationState.NO_SPEECH.name, graph.invocationDebug.last?.result) }

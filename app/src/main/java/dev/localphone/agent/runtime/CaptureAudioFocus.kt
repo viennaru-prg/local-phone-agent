@@ -8,17 +8,20 @@ import android.os.Handler
 import android.os.Looper
 
 interface CaptureFocus {
+    val modeName: String get() = "TRANSIENT_MAY_DUCK"
     fun acquire(onLost: () -> Unit): Boolean
     fun release()
 }
 
 /** System ducking only: no transport play/pause is issued to restore the previous state. */
-class CaptureAudioFocus(context: Context) : CaptureFocus {
+enum class CaptureFocusMode { DUCK, TEMPORARY_PAUSE }
+class CaptureAudioFocus(context: Context, private val mode: CaptureFocusMode = CaptureFocusMode.DUCK) : CaptureFocus {
+    override val modeName get() = mode.name
     private val manager = context.getSystemService(AudioManager::class.java)
     private var request: AudioFocusRequest? = null
     override fun acquire(onLost: () -> Unit): Boolean {
         release()
-        val next = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+        val next = AudioFocusRequest.Builder(if (mode == CaptureFocusMode.DUCK) AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK else AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setAcceptsDelayedFocusGain(false)

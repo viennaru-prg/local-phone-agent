@@ -39,6 +39,7 @@ class VoiceFlowTest {
 
     private class FakeSpeech : SpeechInput {
         lateinit var listener: SpeechInput.Listener
+        val ready get() = ::listener.isInitialized
         var cancelled = false
         override fun start(listener: SpeechInput.Listener) { this.listener = listener; listener.onListening() }
         override fun cancel() { cancelled = true }
@@ -85,7 +86,11 @@ class VoiceFlowTest {
         } while (SystemClock.elapsedRealtime() < end)
         throw last ?: AssertionError("Timed out")
     }
-    private fun feed(action: (SpeechInput.Listener) -> Unit) { instrumentation.runOnMainSync { action(fake.listener) } }
+    private fun waitForFakeReady() = await { assertTrue("Context loading must finish before fake microphone input", fake.ready) }
+    private fun feed(action: (SpeechInput.Listener) -> Unit) {
+        waitForFakeReady()
+        instrumentation.runOnMainSync { action(fake.listener) }
+    }
     private fun noDispatch() = assertTrue(Intents.getIntents().none {
         (it.action == Intent.ACTION_MAIN && it.component?.packageName !in listOf(context.packageName, context.packageName + ".test"))
             || it.action in listOf(android.provider.AlarmClock.ACTION_SET_ALARM, android.provider.AlarmClock.ACTION_SET_TIMER)
@@ -144,13 +149,13 @@ class VoiceFlowTest {
         assertTrue(fake.cancelled)
     }
     @Test fun cancelledSpeechCannotExecuteALateFinalResult() {
-        launch(); pressVoice(); pressVoice()
+        launch(); pressVoice(); waitForFakeReady(); pressVoice()
         feed { it.onFinal("시계 앱 열어줘") }
         statusIncludes("취소했어요")
         noDispatch()
     }
     @Test fun leavingTheAppCancelsListeningAndRejectsLateSpeech() {
-        launch(); pressVoice()
+        launch(); pressVoice(); waitForFakeReady()
         device.pressHome()
         await { assertTrue(fake.cancelled) }
         assertTrue(fake.cancelled)

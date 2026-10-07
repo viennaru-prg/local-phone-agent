@@ -20,6 +20,7 @@ class AgentApplication : Application() {
     val speechModel by lazy { SpeechModelRepository(this) }
     val invocationArbiter = InvocationArbiter()
     val invocationDebug by lazy { InvocationDebugStore(settings) }
+    val speechDiagnostics = SpeechDiagnostics()
     val uiAutomation by lazy { AccessibilityRuntime(this, settings) }
     // In-process instrumentation seam. No exported intent or remote input can replace speech.
     internal var speechFactoryOverride: (() -> SpeechInput)? = null
@@ -30,10 +31,16 @@ class AgentApplication : Application() {
         settings.get("speech_silence_ms").toIntOrNull() ?: 900,
         settings.get("speech_max_ms").toIntOrNull() ?: 18000,
     ) }.getOrDefault(SpeechTiming())
-    fun createSpeechInput(): SpeechInput {
+    fun createSpeechInput(context: dev.localphone.core.SpeechContext = dev.localphone.core.SpeechContext()): SpeechInput {
         speechFactoryOverride?.let { return it() }
-        if (android.os.Build.VERSION.SDK_INT >= 31 && settings.get("verified_native_speech") == "yes" &&
-            android.speech.SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) return OnDeviceSpeechInput(this)
-        return LocalSpeechInput(speechModel, timing = speechTiming())
+        if (settings.get("speech_engine") == "bundled") return LocalSpeechInput(speechModel, timing = speechTiming())
+        if (android.os.Build.VERSION.SDK_INT >= 31) return OnDeviceSpeechInput(this, context.biasStrings(), speechTiming().maxUtteranceMs + 7000L)
+        return object : SpeechInput {
+            override fun start(listener: SpeechInput.Listener) = listener.onFailure(SpeechFailure(SpeechError.STT_FAILED,
+                "Android 온디바이스 음성 인식은 Android 12 이상에서 지원됩니다. 음성 설정에서 기존 포함 모델을 직접 선택할 수 있습니다."))
+            override fun cancel() = Unit
+        }
     }
+    fun createCaptureFocus(): CaptureFocus = focusFactoryOverride?.invoke() ?: CaptureAudioFocus(this,
+        if (settings.get("stt_focus_mode") == "pause") CaptureFocusMode.TEMPORARY_PAUSE else CaptureFocusMode.DUCK)
 }

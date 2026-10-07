@@ -8,6 +8,8 @@ import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import dev.localphone.core.SpeechHypothesis
+import dev.localphone.core.SpeechRecognitionResult
 import com.k2fsa.sherpa.onnx.*
 import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicBoolean
@@ -28,6 +30,7 @@ interface SpeechInput : AutoCloseable {
         fun onLevel(level: Float)
         fun onPartial(text: String)
         fun onFinal(text: String)
+        fun onRecognition(result: SpeechRecognitionResult) = onFinal(result.hypotheses.firstOrNull()?.text.orEmpty())
         fun onError(message: String)
         fun onSpeechStarted() {}
         fun onSpeechEnded() {}
@@ -236,7 +239,11 @@ class LocalSpeechInput(
         val result = transcript; val failure = error
         post(session) {
             session.listener.onMetrics(metrics)
-            if (failure != null) session.listener.onFailure(failure) else session.listener.onFinal(result)
+            if (failure != null) session.listener.onFailure(failure) else session.listener.onRecognition(SpeechRecognitionResult(
+                hypotheses = listOf(SpeechHypothesis(result, null, 0)), engine = metrics.engine, onDevice = true,
+                audioDurationMs = metrics.captureMs, finalLatencyMs = metrics.finalDecodeMs,
+                totalLatencyMs = metrics.modelLoadMs + metrics.captureMs + metrics.finalDecodeMs,
+            ))
         }
     }
     private fun stopAndWait(session: Session) {

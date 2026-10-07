@@ -34,6 +34,10 @@ class VoiceSessionCoordinator(
     private var deadline: Job? = null
     private var warming: Deferred<ModelPreparation>? = null
     private var clarification: ClarificationRequest? = null
+    private var speechChoices: List<TranscriptCandidate>? = null
+    private var speechPrompt = ""
+    private var speechEvidence: ResolvedTranscript? = null
+    private var speechDiagnostic: SpeechDiagnostic? = null
     private val times = linkedMapOf("T0" to 0L)
     private val transitions = mutableListOf<String>()
     private var transcript = ""
@@ -68,22 +72,32 @@ class VoiceSessionCoordinator(
         if (machine.move(next)) { transitions += next.name; observer.onState(next, message) }
     }
     private fun listen() {
-        if (!focus.acquire { if (active) finish(InvocationState.CANCELLED, "다른 오디오 작업으로 취소했습니다.") }) {
-            focusStatus = "DENIED"; finish(InvocationState.EXECUTION_FAILED, "음성 입력을 위한 오디오 사용 권한을 얻지 못했습니다."); return
-        }
-        focusStatus = "TRANSIENT_MAY_DUCK"
         val token = ++speechToken
-        val source = graph.createSpeechInput(); speech = source
         deadline?.cancel()
-        // Also bounds engines that never send a ready callback.
         deadline = scope.launch { delay(10000); if (active && token == speechToken && state == InvocationState.STARTING)
             finish(InvocationState.STT_FAILED, "마이크를 시작하지 못했습니다.") }
+        scope.launch {
+            try {
+                val context = engine.speechContext()
+                if (!active || token != speechToken) return@launch
+                if (!focus.acquire { if (active) finish(InvocationState.CANCELLED, "다른 오디오 작업으로 취소했습니다.") }) {
+                    focusStatus = "DENIED"; finish(InvocationState.EXECUTION_FAILED, "음성 입력을 위한 오디오 사용 권한을 얻지 못했습니다."); return@launch
+                }
+                focusStatus = focus.modeName
+                if (graph.speechFactoryOverride == null) delay(150)
+                if (active && token == speechToken) listenSource(token, context)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { if (active && token == speechToken) finish(InvocationState.STT_FAILED, "음성 입력을 준비하지 못했습니다.") }
+        }
+    }
+    private fun listenSource(token: Int, context: SpeechContext) {
+        val source = graph.createSpeechInput(context); speech = source
         source.start(object : SpeechInput.Listener {
             private fun current() = active && token == speechToken && state in listOf(InvocationState.STARTING, InvocationState.LISTENING, InvocationState.TRANSCRIBING)
             override fun onListening() {
                 if (!current()) return
                 mark(if (clarification == null) "T2" else "C_T2")
-                move(InvocationState.LISTENING, clarification?.prompt ?: "듣는 중…")
+                move(InvocationState.LISTENING, clarification?.prompt ?: speechPrompt.ifBlank { "듣는 중…" })
                 feedback.ready()
                 deadline?.cancel()
                 deadline = scope.launch {
@@ -97,7 +111,7 @@ class VoiceSessionCoordinator(
                 onListening()
             }
             override fun onLevel(level: Float) { if (current()) observer.onLevel(level) }
-            override fun onPartial(text: String) { /* Partial text never reaches AgentEngine. */ }
+            override fun onPartial(text: String) { if (current() && text.isNotBlank()) observer.onState(state, text) }
             override fun onSpeechStarted() { if (current()) mark(if (clarification == null) "T3" else "C_T3") }
             override fun onSpeechStartedAt(elapsedRealtimeMs: Long) { if (current()) markAt(if (clarification == null) "T3" else "C_T3", elapsedRealtimeMs) }
             override fun onSpeechEndedAt(elapsedRealtimeMs: Long) {
@@ -113,13 +127,39 @@ class VoiceSessionCoordinator(
             }
             override fun onMetrics(metrics: SpeechMetrics) { if (current()) this@VoiceSessionCoordinator.metrics = metrics }
             override fun onFinal(text: String) {
+                onRecognition(SpeechRecognitionResult(listOf(SpeechHypothesis(text, null, 0)), engine = "legacy-input-callback", onDevice = true))
+            }
+            override fun onRecognition(result: SpeechRecognitionResult) {
                 if (!current()) return
+                if (!result.finalResult) return
                 if (state == InvocationState.STARTING) { finish(InvocationState.STT_FAILED, "마이크 준비를 확인하지 못했습니다."); return }
                 if (state != InvocationState.TRANSCRIBING) onSpeechEnded()
                 mark(if (clarification == null) "T5" else "C_T5")
                 speechToken++; source.cancel(); speech = null; deadline?.cancel(); focus.release()
-                val clean = text.trim().trimEnd('.', '。', '!')
+                var resolved = graph.speechDiagnostics.resolve(result, context)
+                if (speechDiagnostic == null) speechDiagnostic = graph.speechDiagnostics.last
+                var clean = resolved.selectedText.trim().trimEnd('.', '。', '!')
                 if (clean.isBlank()) { finish(InvocationState.NO_SPEECH, "음성을 듣지 못했습니다."); return }
+                if (resolved.requiresClarification) {
+                    if (speechChoices != null || clarification != null) { finish(InvocationState.LOW_CONFIDENCE, resolved.clarification); return }
+                    move(InvocationState.PLANNING, resolved.clarification)
+                    move(InvocationState.POLICY_CHECK, resolved.clarification)
+                    if (!machine.clarifyOnce()) { finish(InvocationState.LOW_CONFIDENCE, resolved.clarification); return }
+                    speechChoices = resolved.candidates.take(3); speechPrompt = resolved.clarification
+                    transitions += "STT_AMBIGUITY_CLARIFICATION_ONCE"
+                    observer.onState(InvocationState.STARTING, speechPrompt)
+                    listen(); return
+                }
+                speechChoices?.let { choices ->
+                    val selected = choices.filter { candidate ->
+                        PlaceText.normalize(candidate.text) == PlaceText.normalize(clean) ||
+                            candidate.selectionAliases.any { alias -> PlaceText.variants(clean).any { it in PlaceText.variants(alias) } }
+                    }.distinctBy { it.semanticKey }.singleOrNull()
+                    if (selected == null) { finish(InvocationState.AMBIGUOUS, "말씀하신 명령을 구분하지 못했습니다. 다시 호출해 주세요."); return }
+                    clean = selected.text; resolved = resolved.copy(selectedText = clean, evidence = resolved.evidence + "HUMAN_VOICE_CLARIFICATION")
+                    clarificationText = result.hypotheses.first().text; speechChoices = null; speechPrompt = ""
+                }
+                speechEvidence = resolved
                 if (clarification == null) transcript = clean else clarificationText = clean
                 process(clean)
             }
@@ -143,7 +183,7 @@ class VoiceSessionCoordinator(
                     move(InvocationState.POLICY_CHECK, "처리 중…")
                     engine.clarify(checkNotNull(clarification), text)
                 } else {
-                    engine.prepare(text, useModel) { stage ->
+                    engine.prepareSpeech(speechEvidence ?: ResolvedTranscript(emptyList(), text, false, null, emptyList(), emptyList()), useModel) { stage ->
                         if (stage == EngineStage.PLANNING) move(InvocationState.PLANNING, "처리 중…")
                         else { mark("T6"); move(InvocationState.POLICY_CHECK, "처리 중…") }
                     }
@@ -190,7 +230,7 @@ class VoiceSessionCoordinator(
             modelInferenceMs = if (useModel) graph.planner.lastInferenceMs else null, toolPlan = planText,
             policy = policyText, execution = executionText, disposition = disposition.name, result = result.name,
             error = if (result == InvocationState.SUCCESS) "" else error, audioFocus = focusStatus,
-            duplicateInvocations = duplicates, totalMs = SystemClock.elapsedRealtime() - invokedAt))
+            duplicateInvocations = duplicates, totalMs = SystemClock.elapsedRealtime() - invokedAt, speech = speechDiagnostic))
         graph.invocationArbiter.release(sessionId); ownsLease = false
         warming?.cancel(); work?.cancel()
         if (useModel) scope.launch(NonCancellable) { graph.planner.close() } // No unmeasured permanent Agent cache.

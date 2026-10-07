@@ -6,8 +6,8 @@ android {
         applicationId = "dev.localphone.agent"
         minSdk = 26
         targetSdk = 35
-        versionCode = providers.gradleProperty("releaseVersionCode").getOrElse("6").toInt()
-        versionName = providers.gradleProperty("releaseVersionName").getOrElse("0.5.1")
+        versionCode = providers.gradleProperty("releaseVersionCode").getOrElse("7").toInt()
+        versionName = providers.gradleProperty("releaseVersionName").getOrElse("0.6.0")
         val updateRepository = providers.gradleProperty("updateRepository").getOrElse("viennaru-prg/local-phone-agent")
         require(Regex("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+").matches(updateRepository))
         buildConfigField("String", "UPDATE_REPOSITORY", "\"$updateRepository\"")

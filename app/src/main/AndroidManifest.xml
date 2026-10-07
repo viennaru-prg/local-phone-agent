@@ -46,5 +46,6 @@
         </activity>
         <activity android:name=".VoiceOnboardingActivity" android:exported="false" />
         <activity android:name=".InvocationDebugActivity" android:exported="false" />
+        <activity android:name=".SpeechEvaluationActivity" android:exported="false" />
     </application>
 </manifest>

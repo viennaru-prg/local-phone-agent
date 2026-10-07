@@ -12,7 +12,7 @@ data class InvocationTrace(val sessionId: String, val invokedAt: Long = System.c
     val clarification: String, val stt: SpeechMetrics?, val agentLoad: ModelPreparation?,
     val modelInferenceMs: Long?, val toolPlan: String, val policy: String, val execution: String,
     val disposition: String, val result: String, val error: String, val audioFocus: String,
-    val duplicateInvocations: Int, val totalMs: Long)
+    val duplicateInvocations: Int, val totalMs: Long, val speech: SpeechDiagnostic? = null)
 
 /** One bounded encrypted trace, private to this installation. Never logcat or shared storage. */
 class InvocationDebugStore(private val settings: SecureSettings) {
@@ -20,8 +20,8 @@ class InvocationDebugStore(private val settings: SecureSettings) {
     @Volatile var last: InvocationTrace? = null
         private set
     fun write(trace: InvocationTrace) {
-        if (!BuildConfig.DEBUG) return
         last = trace
+        if (!BuildConfig.DEBUG && settings.get("stt_diagnostics") != "yes") return
         worker.execute { runCatching { settings.put("last_voice_trace", Gson().toJson(trace)) } }
     }
     fun read(): InvocationTrace? = last ?: runCatching {

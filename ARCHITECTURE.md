@@ -34,7 +34,13 @@ UI 횟수·같은 동작 반복·앱 이탈·잠금을 제한합니다. 작은 O
 
 런처 `VoiceInvocationActivity`는 자동 음성 진입이고, 수동 `MainActivity` 홈에는 중앙 마이크·듣기 애니메이션만 있습니다. `VoiceSessionCoordinator`는 기존 세션 lease와 최종 인식 한 번 소비를 유지합니다. `externalExecution`은 명령이 대상 앱으로 화면을 넘기는 동안 onStop 취소를 막고, 작업 완료/실패 때 정리합니다. 듣는 중 사용자가 나가면 마이크를 종료하며 후속 결과는 무시합니다. RegiStar 자체 설정·뒤 두 번 탭 감지는 앱이 강제로 설정하지 않습니다.
 
-로컬 한국어 STT는 bundled sherpa-onnx Zipformer입니다. AudioRecord 캡처와 decoder를 분리하고 큐·최대 발화를 제한합니다. 녹음 파일과 클라우드 fallback은 없습니다. 명시적 온디바이스 Android STT는 사용자가 한국어/비행기 모드 검증을 마친 뒤 선택할 수 있습니다. 마이크 AudioFocus는 캡처 후 반환하며 임의 pause/resume 복원 동작을 하지 않습니다. 실제 차량·Bluetooth 음성 정확도는 미검증입니다.
+기본 한국어 STT는 Android createOnDeviceSpeechRecognizer입니다. ko-KR/FREE_FORM, 최대 5개 후보, partial과 bounded dynamic bias를 요청합니다. 서비스가 반환한 모든 후보와 선택적 confidence를 공통 SpeechRecognitionResult로 보존합니다. 일반 recognizer나 cloud fallback은 만들지 않으며, 기존 bundled sherpa-onnx Zipformer는 사용자가 직접 선택하는 경로로 유지합니다. native 마이크는 시스템 서비스가 처리하고 custom AudioRecord는 기존 모델 또는 명시적 평가 버튼에서만 사용합니다.
+
+SpeechVocabulary는 암호화 UserPlaces, 지원하는 장소 역할, 같은 공간의 관련 앱과 현재 Tool 메타데이터에서 작은 bias list를 만듭니다. 연락처 조회나 권한 추가는 없습니다. ContextualTranscriptResolver는 N-best·Hangul 분해/음성 거리·문장 구조로 결정적인 재평가를 합니다. 특정 오인식 치환과 LLM 보정은 없습니다. 실제 다른 목적지/동작이 경합하거나 confidence가 낮을 때만 질문합니다. 원래 부정·조건 표현, 숫자, 정확한 기존 entity를 함부로 교체하지 않습니다. 결과와 acoustic confidence는 기존 AgentEngine의 정책 확인 전까지 전달합니다.
+
+context 준비 → AudioFocus → 150ms 안정화 → native 시작 → onReadyForSpeech → LISTENING → haptic 순서입니다. 캡처 종료 전에 focus를 반환하며 transport resume은 보내지 않습니다. 기본 duck과 선택적 TRANSIENT pause 전략이 있고 실제 음악/차량 우열은 미측정입니다. partial·취소 후 callback·마이크 준비 전 결과는 작업을 실행하지 않습니다.
+
+음성 진단은 마지막 한 건을 메모리에 둡니다. DEBUG 또는 명시적 opt-in 실행 진단만 암호화 저장합니다. 비공개 평가 Activity는 별도 동의·버튼으로만 녹음하고 내부 noBackupFilesDir에 결과를 저장하며 raw PCM 저장은 기본 해제입니다. 이전 모델과 native bias 0/12/24 및 같은 native 결과의 contextual rescore를 비교하도록 구성했습니다. AUDIO_SOURCE extra의 실제 기기 지원은 검증 대상이며 지원 API만으로 동일 음성 replay 성공을 주장하지 않습니다. 이번 배포의 자연 발화 평가는 사용자 요청으로 생략했습니다.
 
 ## 설치 공간, 권한과 배포
 
@@ -42,13 +48,13 @@ UI 횟수·같은 동작 반복·앱 이탈·잠금을 제한합니다. 작은 O
 
 `automation`은 debuggable/testOnly가 아니지만 개인 시험판이며 기존 개발 인증서로 서명합니다. 접근성 및 알림 listener를 명시적으로 포함합니다. `install`은 과거 권한 축소판으로 두 기능이 없습니다. 사용자에게 이번 요청의 설치판으로 권하지 않습니다. 실제 Play Protect 설치 승인과 Google Play 접근성 정책 적합성은 확인하지 않았습니다. 기능을 숨기거나 보호를 끄지 않습니다.
 
-화면 원문은 일시 메모리로 처리하고 전송/저장하지 않습니다. 검증된 목적지 캐시는 선택 사항입니다. Debug의 마지막 실행 한 건은 암호화 기록이고 automation에서는 DEBUG=false로 비활성입니다. 대상 앱의 통신, 선택적 공개 장소 REST API와 사용자 Deep Link는 외부 AI 호출과 구별합니다.
+화면 원문은 일시 메모리로 처리하고 전송/저장하지 않습니다. 검증된 목적지 캐시는 선택 사항입니다. 마지막 실행 한 건의 암호화 저장은 DEBUG 또는 명시적 opt-in만 허용하며 automation의 기본값은 메모리 진단입니다. 대상 앱의 통신, 선택적 공개 장소 REST API와 사용자 Deep Link는 외부 AI 호출과 구별합니다.
 
 ## 검증
 
 core는 목표 보존·빠른 경로 실패·좌표·음성 계획·관측 token/fingerprint 검사를 수행합니다. Android instrumentation은 실제 OS AccessibilityService가 별도의 testOnly 앱의 Views를 누르고 검색·선택·주행 상태를 관측하게 합니다. fixture의 NAVER 패키지는 URI 계약 시험용이며 실제 네이버 앱으로 설명하지 않습니다. shell 접근성 허용은 확인된 전용 AVD의 테스트 코드에만 존재합니다.
 
-최종 APK 해시가 설치판 검사 기록과 일치하는지 패키징에서 확인합니다. 기존 개발판 전체 검사와 nondebug automation 검사 수는 중복 합산하지 않습니다. S25 일반 영역의 USB 설치·사용자 접근성 활성화 및 실제 네이버 집/회사·자주 가는 곳 탭 구조는 확인했습니다. 실제 네이버 안내 시작·Knox·RegiStar·음악 앱의 실제 소리·FunctionGemma inference는 별도 미검증입니다. 0.5.1은 update-verification.json과 automation-test/personal-nav-shipping.json에 기록합니다. 이전 0.5.0은 history/0.5.0에 보존합니다.
+최종 APK 해시가 설치판 검사 기록과 일치하는지 패키징에서 확인합니다. 기존 개발판 전체 검사와 nondebug automation 검사 수는 중복 합산하지 않습니다. S25 일반 영역의 과거 USB 설치·사용자 접근성 활성화 및 실제 네이버 집/회사·자주 가는 곳 탭 구조는 확인했습니다. 실제 네이버 안내 시작·Knox·RegiStar·음악 앱의 실제 소리·FunctionGemma inference는 별도 미검증입니다. 0.6.0은 update-verification.json과 automation-test/stt-shipping.json에 기록합니다. 이전 0.5.1은 history/0.5.1에 보존합니다.
 
 ## 앱 업데이트
 

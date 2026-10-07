@@ -10,7 +10,7 @@ enum class ResultDisposition { BACKGROUND_ACTION, FOREGROUND_NAVIGATION, FOREGRO
 data class AgentFailure(val state: InvocationState, val message: String)
 data class PreparedRequest(val plan: ToolPlan, val decision: PolicyDecision,
                            val failure: AgentFailure? = null, val clarification: ClarificationRequest? = null,
-                           val interpretation: String = "GOAL_WITH_STRUCTURED_FAST_PATH")
+                           val interpretation: String = "GOAL_WITH_STRUCTURED_FAST_PATH", val speechConfidence: Float? = null)
 data class AgentOutcome(val execution: ExecutionResult?, val disposition: ResultDisposition,
                         val failure: AgentFailure? = null, val evidence: List<String> = emptyList())
 
@@ -24,6 +24,15 @@ class AgentEngine(private val activity: Activity, private val graph: AgentApplic
     var externalExecution = false
         private set
     private val previousPackage = graph.uiAutomation.foregroundPackage()
+    suspend fun speechContext(): SpeechContext = withContext(Dispatchers.IO) {
+        val playback = runCatching { media.controllers().firstOrNull()?.playbackState?.state?.toString() }.getOrNull()
+        SpeechVocabulary.build(graph, device.apps(), previousPackage, playback)
+    }
+    suspend fun prepareSpeech(speech: ResolvedTranscript, useModel: Boolean, onStage: (EngineStage) -> Unit = {}): PreparedRequest {
+        if (speech.requiresClarification) return blocked(InvocationState.LOW_CONFIDENCE, speech.clarification)
+            .copy(speechConfidence = speech.confidence)
+        return prepare(speech.selectedText, useModel, onStage).copy(speechConfidence = speech.confidence)
+    }
     suspend fun prepare(utterance: String, useModel: Boolean, onStage: (EngineStage) -> Unit = {}): PreparedRequest {
         onStage(EngineStage.PLANNING)
         CommandSafety.blockedReason(utterance)?.let { reason ->

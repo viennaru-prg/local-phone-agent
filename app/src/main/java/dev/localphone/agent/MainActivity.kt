@@ -51,6 +51,8 @@ class MainActivity : ComponentActivity() {
     private var voicePhase = VoicePhase.IDLE
     private var voiceGeneration = 0
     private var speech: SpeechInput? = null
+    private var voicePreparation: kotlinx.coroutines.Job? = null
+    private var captureFocus: CaptureFocus? = null
     private var permissionPending = false
     private var voiceButton: VoiceButton? = null
     private var voiceHeading: TextView? = null
@@ -101,6 +103,10 @@ class MainActivity : ComponentActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) { updater.state.collect { renderUpdateState(it) } }
         }
         receiveShare(intent)
+        if (intent.getBooleanExtra("open_speech_evaluation", false)) {
+            intent.removeExtra("open_speech_evaluation")
+            startActivity(Intent(this, SpeechEvaluationActivity::class.java))
+        }
     }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("command", if (showingSettings && ::input.isInitialized) input.text.toString() else commandText)
@@ -250,12 +256,13 @@ class MainActivity : ComponentActivity() {
         }
         body.addView(toggle)
         body.addView(Switch(this).apply {
-            text = "기기 음성 인식 사용 (한국어·비행기 모드 확인 후)"
-            isChecked = graph.settings.get("verified_native_speech") == "yes"
-            setOnCheckedChangeListener { _, checked -> graph.settings.put("verified_native_speech", if (checked) "yes" else "") }
+            text = "Android 온디바이스 한국어 인식 사용 (기본)"
+            isChecked = graph.settings.get("speech_engine") != "bundled"
+            setOnCheckedChangeListener { _, checked -> graph.settings.put("speech_engine", if (checked) "native" else "bundled") }
         })
+        button("음성 인식 상태·평가") { startActivity(Intent(this, SpeechEvaluationActivity::class.java)) }
         addText("앱 실행·지도·직접 버튼 선택·검색은 모델 없이도 시도합니다. 복잡한 화면 목표는 불러온 로컬 모델로 해석합니다.", 13)
-        addText("기본값은 앱에 포함된 로컬 한국어 모델입니다. 음성과 녹음 파일을 외부로 전송하거나 저장하지 않습니다.", 13)
+        addText("기본값은 Android 온디바이스 한국어 인식입니다. 기존 포함 모델은 직접 선택할 수 있습니다. 음성을 클라우드로 보내지 않으며 일반 음성 호출은 녹음 파일을 저장하지 않습니다.", 13)
     }
 
     private fun toggleVoice() {
@@ -338,30 +345,58 @@ class MainActivity : ComponentActivity() {
         speech?.close()
         transcript = ""; statusMessage = ""
         setVoicePhase(VoicePhase.PREPARING)
-        speech = graph.createSpeechInput().also { source -> source.start(object : SpeechInput.Listener {
+        voicePreparation = lifecycleScope.launch {
+            val context = try { engine.speechContext() } catch (_: Exception) {
+                if (generation == voiceGeneration) { setVoicePhase(VoicePhase.IDLE); tell("음성 입력을 준비하지 못했습니다.") }; return@launch
+            }
+            if (generation != voiceGeneration || !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@launch
+            val focus = graph.createCaptureFocus(); captureFocus = focus
+            if (!focus.acquire { cancelVoice(silent = true) }) { setVoicePhase(VoicePhase.IDLE); tell("음성 입력을 위한 오디오 사용 권한을 얻지 못했습니다."); return@launch }
+            if (graph.speechFactoryOverride == null) kotlinx.coroutines.delay(150)
+            if (generation != voiceGeneration) { focus.release(); return@launch }
+        speech = graph.createSpeechInput(context).also { source -> source.start(object : SpeechInput.Listener {
             private fun current() = generation == voiceGeneration && voicePhase in listOf(VoicePhase.PREPARING, VoicePhase.LISTENING)
-            override fun onListening() { if (current()) setVoicePhase(VoicePhase.LISTENING) }
+            override fun onListening() { if (current()) { setVoicePhase(VoicePhase.LISTENING); HapticVoiceFeedback(this@MainActivity, graph.settings).ready() } }
             override fun onLevel(level: Float) { if (current()) voiceButton?.setLevel(level) }
             override fun onPartial(text: String) { if (current()) { transcript = text; updateVoiceHome() } }
             override fun onFinal(text: String) {
+                onRecognition(SpeechRecognitionResult(listOf(SpeechHypothesis(text, null, 0)), engine = "legacy-input-callback", onDevice = true))
+            }
+            override fun onRecognition(result: SpeechRecognitionResult) {
                 if (!current()) return
+                if (!result.finalResult) return
+                if (voicePhase != VoicePhase.LISTENING) { onError("마이크 준비를 확인하지 못했습니다."); return }
                 // Retire this session before dispatch: duplicate or late results cannot run another command.
-                voiceGeneration++; source.cancel()
-                val command = text.trim().trimEnd('.', '。', '!')
+                voiceGeneration++; source.cancel(); focus.release()
+                val resolved = graph.speechDiagnostics.resolve(result, context)
+                val command = resolved.selectedText.trim().trimEnd('.', '。', '!')
                 if (command.isBlank()) { setVoicePhase(VoicePhase.IDLE); tell("잘 듣지 못했어요. 다시 눌러 말해주세요."); return }
                 transcript = command; commandText = command
                 setVoicePhase(VoicePhase.IDLE)
-                handleCommand(command)
+                if (resolved.requiresClarification) {
+                    val choices = resolved.candidates.take(3).distinctBy { it.semanticKey }
+                    tell(resolved.clarification)
+                    if (choices.isNotEmpty()) AlertDialog.Builder(this@MainActivity).setTitle("어느 명령인가요?")
+                        .setItems(choices.map { it.text }.toTypedArray()) { _, index ->
+                            val chosen = resolved.copy(selectedText = choices[index].text, requiresClarification = false,
+                                evidence = resolved.evidence + "HUMAN_SCREEN_TRANSCRIPT_CHOICE")
+                            transcript = chosen.selectedText; handleCommand(chosen.selectedText, chosen)
+                        }.setNegativeButton("취소", null).show()
+                } else handleCommand(command, resolved)
             }
+            override fun onSpeechEnded() { if (current()) focus.release() }
             override fun onError(message: String) {
                 if (!current()) return
-                voiceGeneration++; source.cancel(); transcript = ""
+                voiceGeneration++; source.cancel(); focus.release(); transcript = ""
                 setVoicePhase(VoicePhase.IDLE); tell(message)
             }
         }) }
+        }
     }
     private fun cancelVoice(silent: Boolean = false) {
         voiceGeneration++; permissionPending = false
+        voicePreparation?.cancel(); voicePreparation = null
+        captureFocus?.release(); captureFocus = null
         speech?.cancel(); speech = null
         if (voicePhase in listOf(VoicePhase.PREPARING, VoicePhase.LISTENING)) {
             transcript = ""; setVoicePhase(VoicePhase.IDLE)
@@ -383,7 +418,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun handleCommand(text: String) {
+    private fun handleCommand(text: String, speechEvidence: ResolvedTranscript? = null) {
         if (busy) return
         CommandSafety.blockedReason(text)?.let { tell(it); return }
         val here = Regex("^여기(?:를)?\\s*(?:앞으로\\s*)?(.+?)(?:으로|로)\\s*(?:기억해|저장해)(?:줘)?$").matchEntire(text)
@@ -405,7 +440,7 @@ class MainActivity : ComponentActivity() {
         }
         launchSafe(command = true) {
             tell(if (useModel) "로컬 모델이 명령을 해석하고 있습니다…" else "작업과 실행 가능한 앱을 확인하고 있습니다…")
-            val prepared = engine.prepare(text, useModel)
+            val prepared = if (speechEvidence != null) engine.prepareSpeech(speechEvidence, useModel) else engine.prepare(text, useModel)
             val plan = prepared.plan
             val decision = prepared.decision
             when (decision) {

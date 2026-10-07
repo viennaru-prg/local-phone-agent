@@ -96,7 +96,7 @@ class VoiceInvocationActivity : ComponentActivity() {
         if (started) return
         started = true
         coordinator = VoiceSessionCoordinator(graph, engine, lifecycleScope,
-            graph.focusFactoryOverride?.invoke() ?: CaptureAudioFocus(this), HapticVoiceFeedback(this, graph.settings), arrivedAt,
+            graph.createCaptureFocus(), HapticVoiceFeedback(this, graph.settings), arrivedAt,
             object : VoiceSessionCoordinator.Observer {
                 override fun onState(state: InvocationState, message: String) {
                     label.text = message

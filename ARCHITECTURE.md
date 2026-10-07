@@ -48,8 +48,12 @@ UI 횟수·같은 동작 반복·앱 이탈·잠금을 제한합니다. 작은 O
 
 core는 목표 보존·빠른 경로 실패·좌표·음성 계획·관측 token/fingerprint 검사를 수행합니다. Android instrumentation은 실제 OS AccessibilityService가 별도의 testOnly 앱의 Views를 누르고 검색·선택·주행 상태를 관측하게 합니다. fixture의 NAVER 패키지는 URI 계약 시험용이며 실제 네이버 앱으로 설명하지 않습니다. shell 접근성 허용은 확인된 전용 AVD의 테스트 코드에만 존재합니다.
 
-최종 APK 해시가 설치판 검사 기록과 일치하는지 패키징에서 확인합니다. 기존 개발판 전체 검사와 nondebug automation 검사 수는 중복 합산하지 않습니다. 실기 S25/Knox/RegiStar·실제 네이버 UI·음악 앱의 실제 소리·FunctionGemma inference는 별도 미검증입니다. 0.5.0은 update-verification.json, 0.4.0은 automation-verification.json에 기록합니다.
+최종 APK 해시가 설치판 검사 기록과 일치하는지 패키징에서 확인합니다. 기존 개발판 전체 검사와 nondebug automation 검사 수는 중복 합산하지 않습니다. S25 일반 영역의 USB 설치·사용자 접근성 활성화 및 실제 네이버 집/회사·자주 가는 곳 탭 구조는 확인했습니다. 실제 네이버 안내 시작·Knox·RegiStar·음악 앱의 실제 소리·FunctionGemma inference는 별도 미검증입니다. 0.5.1은 update-verification.json과 automation-test/personal-nav-shipping.json에 기록합니다. 이전 0.5.0은 history/0.5.0에 보존합니다.
 
 ## 앱 업데이트
 
 설정 버튼으로 명시적으로 시작한 업데이트는 별도의 ViewModel이 관리합니다. GitHub 최신 정식 Release와 update.json의 versionCode를 확인하고, 새 버전만 제한된 HTTPS 주소에서 다운로드합니다. 기존 서명·패키지·버전·파일 크기·SHA-256 검사를 통과한 APK만 내부 cache/updates에서 FileProvider로 해당 설치 공간의 시스템 설치 프로그램에 전달합니다. 접근성으로 설치 권한이나 최종 승인을 누르지 않습니다. Android의 앱 설치 허용은 사용자에게 요청하며 설치 확인은 OS 화면에 남깁니다. 자세한 계약은 docs/github-updates.md에 있습니다.
+
+## 네이버 개인 장소 영역
+
+NaverPersonalUi는 집/회사 전용 등록, 자주 가는 곳, 저장 장소와 MY/즐겨찾기 진입을 별도로 식별합니다. 화면의 읽을 수 있는 텍스트에서 실제 클릭 가능한 부모를 찾으며 사용자별 장소 설정이나 고정 좌표가 필요하지 않습니다. 미등록 항목과 카테고리 탭은 목적지 행과 구분합니다. 집·회사는 전용 역할을 우선하고 다른 목적지는 자주 가는 곳 등 개인 영역을 시도합니다. 캐시의 이름·주소가 현재 검색과 맞지 않으면 캐시 힌트를 버리고 개인 영역 탐색으로 복귀합니다. 동작·시간 제한과 실제 안내 확인·취소·선택적 캐시 조건은 유지합니다.

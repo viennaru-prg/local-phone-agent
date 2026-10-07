@@ -65,7 +65,7 @@ class AccessibilityGoalTest {
         graph.settings.put("music_package", "")
         graph.settings.put("use_functiongemma", "")
         graph.settings.put("voice_onboarded", "yes")
-        graph.settings.put("ui_place:office", "")
+        listOf("office", "home", "parents_home", "테스트치과", "테스트치과로").forEach { graph.settings.put("ui_place:$it", "") }
         graph.settings.put("ui_place:테스트역", "")
         runBlocking { withContext(Dispatchers.IO) { graph.places.all().forEach { graph.places.delete(it.id) } } }
         mode("saved_office")
@@ -148,7 +148,7 @@ class AccessibilityGoalTest {
     @Test fun publicPlaceWithoutApiCredentialsUsesProviderSearchUi() {
         mode("public_search")
         success(result(task("테스트역 가자")))
-        assertEquals(0, count("saved_clicks")); assertEquals(1, count("searches")); assertEquals("테스트역", state()["last_query"]); assertEquals(1, count("navigation_starts"))
+        assertEquals(1, count("saved_clicks")); assertEquals(1, count("searches")); assertEquals("테스트역", state()["last_query"]); assertEquals(1, count("navigation_starts"))
     }
     @Test fun actualSavedIdentityCollisionWaitsForUserBeforeNavigation() {
         mode("ambiguous_office")
@@ -222,6 +222,68 @@ class AccessibilityGoalTest {
         assertEquals(InvocationState.PERMISSION_REQUIRED, outcome.failure?.state)
         assertEquals(true, outcome.execution?.launched); assertEquals(false, outcome.execution?.success)
         await { assertEquals("map", state()["screen"]) }; assertEquals(0, count("navigation_starts")); assertNull(office())
+    }
+    @Test fun homeWorkRegistrationWinsOverACompanyNicknameInGenericFavorites() {
+        mode("personal_priority")
+        success(result(task("회사로 가자")))
+        assertEquals(1, count("home_work_clicks")); assertEquals(0, count("frequent_clicks")); assertEquals(0, count("searches"))
+        assertEquals("서울시 전용회사로 20", state()["place"])
+        assertEquals(Coordinates(36.202020, 128.202020), office()?.coordinates)
+    }
+    @Test fun homeCommandUsesProvidersDedicatedHomeWorkAreaWithoutLocalRegistration() {
+        mode("personal_home")
+        success(result(task("집으로 가자")))
+        assertEquals(1, count("home_work_clicks")); assertEquals("서울시 합성집로 10", state()["place"])
+        assertEquals(0, count("searches")); assertEquals(1, count("navigation_starts"))
+    }
+    @Test fun unregisteredHomeWorkFallsThroughToFrequentPlacesWithoutOpeningRegistration() {
+        mode("frequent_office")
+        success(result(task("회사로 가자")))
+        assertEquals(1, count("home_work_clicks")); assertEquals(1, count("frequent_clicks")); assertEquals(0, count("registration_clicks"))
+        assertEquals(0, count("searches")); assertEquals("서울시 자주가는회사로 30", state()["place"])
+    }
+    @Test fun namedDestinationCanBeResolvedFromFrequentPlacesBeforePublicSearch() {
+        mode("frequent_named")
+        success(result(task("테스트치과로 가자")))
+        assertEquals(1, count("frequent_clicks")); assertEquals(0, count("home_work_clicks")); assertEquals(0, count("searches"))
+        assertEquals("서울시 자주가는치과로 40", state()["place"]); assertEquals(1, count("navigation_starts"))
+    }
+    @Test fun duplicateFrequentPlacesAskOnlyAfterObservingActualDestinationCollision() {
+        mode("frequent_duplicate")
+        val work = task("본가로 가자")
+        await { assertTrue(hasOverlayText("같은 이름의 목적지")) }
+        assertEquals(1, count("frequent_clicks")); assertEquals(0, count("navigation_starts")); assertEquals(0, count("searches"))
+        clickOverlay("합성본가로 60")
+        success(result(work)); assertEquals("서울시 합성본가로 60", state()["place"])
+    }
+    @Test fun allPersonalAreasAreTriedBeforeAskingAboutAPublicCompanyBusiness() {
+        mode("personal_missing")
+        val work = task("회사로 가자")
+        await { assertTrue(hasOverlayText("실제 회사가 어느 곳")) }
+        assertEquals(1, count("home_work_clicks")); assertEquals(1, count("frequent_clicks")); assertEquals(0, count("registration_clicks"))
+        assertEquals(1, count("searches")); assertEquals(0, count("navigation_starts"))
+        clickOverlay("공공검색로 99"); success(result(work))
+    }
+    @Test fun favoritesInsideMyAreDiscoveredRatherThanOnlyTheBottomSavedList() {
+        mode("my_favorites")
+        success(result(task("회사로 가자")))
+        assertEquals(1, count("my_clicks")); assertEquals(1, count("favorites_clicks")); assertEquals(0, count("saved_clicks"))
+        assertEquals(0, count("searches")); assertEquals("서울시 전용회사로 20", state()["place"])
+    }
+    @Test fun frequentPlacesScrollTheirVerticalListRatherThanTheCategoryStrip() {
+        mode("frequent_scroll")
+        success(result(task("테스트치과로 가자")))
+        assertEquals(1, count("frequent_clicks")); assertEquals("서울시 목록아래로 70", state()["place"])
+        assertEquals(0, count("searches")); assertEquals(1, count("navigation_starts"))
+    }
+    @Test fun staleProviderCacheCannotPreventFreshFrequentPlaceDiscovery() {
+        mode("frequent_named")
+        ProviderPlaceCache(graph.settings).save(dev.localphone.agent.data.ProviderPlaceReference(
+            "테스트치과로", "테스트치과", "서울시 이전치과로 99", NaverLinks.PACKAGE, System.currentTimeMillis()))
+        success(result(task("테스트치과로 가자")))
+        assertEquals(1, count("searches")); assertEquals(1, count("frequent_clicks")); assertEquals(1, count("navigation_starts"))
+        assertEquals("서울시 자주가는치과로 40", state()["place"])
+        assertEquals("서울시 자주가는치과로 40", ProviderPlaceCache(graph.settings).get("테스트치과로")?.address)
     }
     private class FakeSpeech : SpeechInput {
         lateinit var listener: SpeechInput.Listener

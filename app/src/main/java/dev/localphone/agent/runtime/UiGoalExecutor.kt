@@ -14,9 +14,9 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
     private val cache = ProviderPlaceCache(graph.settings)
     suspend fun navigate(phrase: String, known: PlaceCandidate?, structuredLaunched: Boolean): UiGoalResult {
         val slot = PlaceSlots.slotFor(phrase)
-        val cached = if (known == null) cache.get(phrase) else null
-        val query = cached?.name?.takeUnless { PlaceSlots.slotFor(it) != null }
-            ?: PlaceText.variants(phrase).minBy { it.length }.let { if (slot != null) PlaceSlots.aliases.getValue(slot).first() else stripParticle(phrase) }
+        var cached = if (known == null) cache.get(phrase) else null
+        val originalQuery = PlaceText.variants(phrase).minBy { it.length }.let { if (slot != null) PlaceSlots.aliases.getValue(slot).first() else stripParticle(phrase) }
+        var query = cached?.name?.takeUnless { PlaceSlots.slotFor(it) != null } ?: originalQuery
         val uiGoal = "$phrase 안내 시작. ${known?.name.orEmpty()} ${cached?.name.orEmpty()} $query"
         val result = graph.uiAutomation.run(NaverLinks.PACKAGE, uiGoal) {
             progress("지도에서 목적지 찾는 중…")
@@ -25,10 +25,15 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
             var selectedAddress = known?.address.orEmpty()
             var selectedCoordinates = known?.coordinates
             var savedAttempted = false
+            val visitedAreas = mutableSetOf<String>()
+            val visitedEntries = mutableSetOf<String>()
+            var currentArea = "map"
+            val areaScrolls = mutableMapOf<String, Int>()
+            var personalBack = false
+            var cachedMisses = 0
             var searchAttempted = false
             var searchRetried = false
             var searchedPersonal = false
-            var scrolls = 0
             var idle = 0
             var startClicked = false
             var resolved = known != null
@@ -49,7 +54,7 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
                 }
                 if (!identityResolved) {
                     val discovery = when (command) {
-                        is UiCommand.Click -> node != null && Regex("저장|즐겨찾기|내 장소|MY|마이|메뉴|더보기|검색|Search|Saved", RegexOption.IGNORE_CASE).containsMatchIn(node.label)
+                        is UiCommand.Click -> node != null && Regex("저장|즐겨찾기|내 장소|집.?회사|자주.*(?:가는|찾는)|MY|마이|메뉴|더보기|검색|Search|Saved|Frequent", RegexOption.IGNORE_CASE).containsMatchIn(node.label)
                         is UiCommand.SetText -> PlaceText.normalize(command.text) == PlaceText.normalize(query)
                         is UiCommand.Submit -> node?.label?.contains(query) == true
                         is UiCommand.Scroll, UiCommand.Back -> true
@@ -96,16 +101,23 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
                     delay(250); return@repeat
                 }
 
-                val personalContext = !searchAttempted || searchedPersonal || normalized.contains("저장장소") || normalized.contains("저장한장소")
-                val lookup = if (cached != null && searchAttempted) cached.name else if (slot != null) PlaceSlots.aliases.getValue(slot).first() else query
-                val aliases = if (slot != null && !(cached != null && searchAttempted)) PlaceSlots.aliases.getValue(slot) else listOf(lookup)
-                val exact = screen.nodes.filter { node -> !node.editable && node.label.isNotBlank() &&
-                    node.label.split(" · ").any { label -> aliases.any { PlaceText.normalize(label) in PlaceText.variants(it) } } &&
-                    !Regex("등록|추가|설정").containsMatchIn(node.label) }
-                    .map(screen::clickTarget).distinctBy { it.token }.filter { node ->
-                        val row = screen.descendants(node.token).joinToString(" ") { it.label } + node.label
-                        !Regex("회사 등록|집 등록|회사 설정|집 설정").containsMatchIn(row)
+                // Prefer NAVER's own home/work registration or frequent-place area over a generic
+                // favorite with the same nickname. These tabs may be children of a clickable Compose View.
+                if (!searchAttempted && cached == null) {
+                    val preferred = NaverPersonalUi.areas(slot).first()
+                    val tab = if (preferred.id !in visitedAreas) NaverPersonalUi.targets(screen, preferred.labels).firstOrNull() else null
+                    if (tab != null) {
+                        visitedAreas += preferred.id
+                        if (act(screen, UiCommand.Click(tab.token))) {
+                            currentArea = preferred.id; savedAttempted = true; idle = 0; return@repeat
+                        }
                     }
+                }
+                val personalContext = !searchAttempted || searchedPersonal || normalized.contains("저장장소") ||
+                    normalized.contains("저장한장소") || normalized.contains("자주가는곳")
+                val lookup = cached?.name?.takeIf { searchAttempted } ?: if (slot != null) PlaceSlots.aliases.getValue(slot).first() else query
+                val aliases = if (slot != null && !(cached != null && searchAttempted)) PlaceSlots.aliases.getValue(slot) else listOf(lookup)
+                val exact = NaverPersonalUi.rows(screen, aliases)
                 val preferredAddress = selectedAddress.takeIf(String::isNotBlank) ?: cached?.address?.takeIf { searchAttempted && it.isNotBlank() }
                 val cachedExact = if (preferredAddress != null) exact.filter { node ->
                     PlaceText.normalize((listOf(node.label) + screen.descendants(node.token).map { it.label }).joinToString(" "))
@@ -126,23 +138,55 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
                         if (act(screen, UiCommand.Click(node.token))) { resolved = true; destinationObserved = true; idle = 0; return@repeat }
                     }
                 }
-                if (!savedAttempted && slot != null && cached == null) {
-                    val saved = screen.exact("저장", "저장 장소", "저장한 장소", "즐겨찾기", "내 장소", "MY", "마이", "Saved")
-                        .map(screen::clickTarget).distinctBy { it.token }
-                    savedAttempted = true
-                    if (saved.isNotEmpty() && act(screen, UiCommand.Click(saved.first().token))) { idle = 0; return@repeat }
-                    val menu = screen.exact("메뉴", "더보기", "Menu").map(screen::clickTarget).firstOrNull()
-                    if (menu != null && act(screen, UiCommand.Click(menu.token))) { savedAttempted = false; return@repeat }
+                if (cached != null && searchAttempted && cachedExact.isEmpty()) {
+                    // A cached provider identity is only an accelerator. A search miss or changed
+                    // address must re-open the provider's personal areas before asking the user.
+                    if (++cachedMisses < 3) { delay(300); return@repeat }
+                    cached = null; query = originalQuery; searchAttempted = false; searchRetried = false
+                    searchedPersonal = false; savedAttempted = false; personalBack = false
+                    visitedAreas.clear(); visitedEntries.clear(); areaScrolls.clear(); seen.clear(); idle = 0
+                    if (navigation.openMap()) { delay(320); return@repeat }
                 }
-                if (slot != null && savedAttempted && !searchAttempted && scrolls < 3) {
-                    val scroll = screen.nodes.firstOrNull { it.scrollable }
-                    if (scroll != null && seen.add(content.hashCode()) && act(screen, UiCommand.Scroll(scroll.token))) { scrolls++; return@repeat }
+                if (!searchAttempted && cached == null) {
+                    if (savedAttempted && areaScrolls.getOrDefault(currentArea, 0) < 3) {
+                        val scroll = NaverPersonalUi.contentScroll(screen)
+                        if (scroll != null && seen.add((currentArea + content).hashCode()) && act(screen, UiCommand.Scroll(scroll.token))) {
+                            areaScrolls[currentArea] = areaScrolls.getOrDefault(currentArea, 0) + 1; return@repeat
+                        }
+                    }
+                    for (area in NaverPersonalUi.areas(slot).filter { it.id !in visitedAreas }) {
+                        val tab = NaverPersonalUi.targets(screen, area.labels).firstOrNull() ?: continue
+                        visitedAreas += area.id
+                        if (act(screen, UiCommand.Click(tab.token))) {
+                            currentArea = area.id; savedAttempted = true; idle = 0; return@repeat
+                        }
+                    }
+                    val entry = NaverPersonalUi.entries(screen).firstOrNull { PlaceText.normalize(it.label.ifBlank {
+                        screen.descendants(it.token).joinToString(" ") { child -> child.label }
+                    }) !in visitedEntries }
+                    if (entry != null) {
+                        visitedEntries += PlaceText.normalize(entry.label.ifBlank { screen.descendants(entry.token).joinToString(" ") { it.label } })
+                        if (act(screen, UiCommand.Click(entry.token))) {
+                            savedAttempted = true; currentArea = "saved"; idle = 0; return@repeat
+                        }
+                    }
+                    val menu = NaverPersonalUi.targets(screen, listOf("메뉴", "더보기", "Menu")).firstOrNull()
+                    if (menu != null && "menu" !in visitedEntries) {
+                        visitedEntries += "menu"
+                        if (act(screen, UiCommand.Click(menu.token))) { idle = 0; return@repeat }
+                    }
+                    // A saved list can hide MY/favorites behind it. Return once to discover the
+                    // remaining root entry points, rather than declaring the private place missing.
+                    if (savedAttempted && !personalBack && screen.nodes.none { it.editable }) {
+                        personalBack = true
+                        if (act(screen, UiCommand.Back)) { idle = 0; return@repeat }
+                    }
                 }
                 if (!searchAttempted) {
                     progress("지도 검색에서 목적지 확인 중…")
                     val input = screen.nodes.firstOrNull { it.editable && Regex("검색|search", RegexOption.IGNORE_CASE).containsMatchIn(it.label + it.viewId) }
                     // Search within saved places if available; otherwise use the provider's own search UI/deep link.
-                    searchedPersonal = slot != null && input != null && Regex("저장.*검색|saved.*search", RegexOption.IGNORE_CASE).containsMatchIn(input.label)
+                    searchedPersonal = input != null && Regex("(?:저장|즐겨찾기|자주.*가는|내 장소).*검색|(?:saved|frequent).*search", RegexOption.IGNORE_CASE).containsMatchIn(input.label)
                     searchAttempted = true
                     if (input != null && act(screen, UiCommand.SetText(input.token, query))) {
                         val updated = screen()
@@ -175,7 +219,7 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
                 }
                 if (assist(screen, false)) { idle = 0; return@repeat }
                 if (++idle >= 4) throw UiUnavailable(InvocationState.LOW_CONFIDENCE,
-                    "지도 앱의 저장 장소와 검색 화면에서 '$phrase' 목적지를 확정하지 못했습니다. 실제 장소명이나 주소를 알려주세요.")
+                    "지도 앱의 집/회사·자주 가는 곳·저장 장소와 검색 화면에서 '$phrase' 목적지를 확정하지 못했습니다. 실제 장소명이나 주소를 알려주세요.")
                 delay(300)
             }
             throw UiUnavailable(InvocationState.EXECUTION_FAILED, "지도 화면에서 작업 완료를 확인하지 못했습니다.")

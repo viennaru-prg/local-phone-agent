@@ -35,7 +35,7 @@ class UpdateFlowTest {
     @Before fun ownedAvdOnly() {
         assertEquals("1", device.executeShellCommand("getprop ro.kernel.qemu").trim())
         assertEquals("LocalPhoneAgent_API35", device.executeShellCommand("getprop ro.boot.qemu.avd_name").trim())
-        assertEquals(5, BuildConfig.VERSION_CODE)
+        assertTrue(BuildConfig.VERSION_CODE > 0)
         assertTrue("Prepare the newer signed AVD update fixture", fixture.isFile)
         assertTrue(badSigner.isFile)
         File(context.cacheDir, "updates").listFiles()?.forEach { it.delete() }
@@ -54,18 +54,20 @@ class UpdateFlowTest {
         do { try { check(); return } catch (e: AssertionError) { failure = e }; SystemClock.sleep(100) } while (SystemClock.elapsedRealtime() < deadline)
         throw failure ?: AssertionError("Timed out")
     }
-    private class FixtureTransport(private val file: File, private val version: Int = 6, private val truncated: Boolean = false) : ReleaseTransport {
+    private class FixtureTransport(private val file: File, private val version: Int = BuildConfig.VERSION_CODE + 1, private val truncated: Boolean = false) : ReleaseTransport {
         val digest = UpdateFiles.sha256(file)
         var apkRequests = 0
         var streamClosed = false
-        val base = "https://github.com/${BuildConfig.UPDATE_REPOSITORY}/releases/download/v0.5.1/"
+        private val nextName = BuildConfig.VERSION_NAME.substringBefore('-').split('.').map(String::toInt)
+            .let { "${it[0]}.${it[1]}.${it[2] + 1}" }
+        val base = "https://github.com/${BuildConfig.UPDATE_REPOSITORY}/releases/download/v$nextName/"
         override fun open(url: String): InputStream {
             if (url == GitHubUpdates.latestUrl(BuildConfig.UPDATE_REPOSITORY)) return ByteArrayInputStream("""{
-                "draft":false,"prerelease":false,"tag_name":"v0.5.1","body":"새 버전 변경 내용: 업데이트 버튼 검사","assets":[
+                "draft":false,"prerelease":false,"tag_name":"v$nextName","body":"새 버전 변경 내용: 업데이트 버튼 검사","assets":[
                 {"name":"update.json","state":"uploaded","size":1000,"browser_download_url":"${base}update.json"},
                 {"name":"LocalPhoneAgent-automation.apk","state":"uploaded","size":${file.length()},"digest":"sha256:$digest","browser_download_url":"${base}LocalPhoneAgent-automation.apk"}]}""".toByteArray())
             if (url == base + "update.json") return ByteArrayInputStream("""{"schemaVersion":1,"packageName":"dev.localphone.agent","channel":"automation",
-                "versionCode":$version,"versionName":"0.5.1-automation","minSdk":26,"apk":{"name":"LocalPhoneAgent-automation.apk","bytes":${file.length()},"sha256":"$digest"}}""".toByteArray())
+                "versionCode":$version,"versionName":"$nextName-automation","minSdk":26,"apk":{"name":"LocalPhoneAgent-automation.apk","bytes":${file.length()},"sha256":"$digest"}}""".toByteArray())
             assertEquals(base + GitHubUpdates.APK_NAME, url); apkRequests++
             val input = if (truncated) ByteArrayInputStream(byteArrayOf(1, 2, 3)) else file.inputStream()
             return object : java.io.FilterInputStream(input) { override fun close() { streamClosed = true; super.close() } }
@@ -78,7 +80,7 @@ class UpdateFlowTest {
     }
     @Test fun newerSameSignerApkIsVerifiedAndSharedOnlyWithSystemInstaller() = runBlocking {
         val network = FixtureTransport(fixture); val client = client(network)
-        val update = checkNotNull(client.check()); assertEquals(6L, update.versionCode)
+        val update = checkNotNull(client.check()); assertEquals(BuildConfig.VERSION_CODE.toLong() + 1, update.versionCode)
         val file = client.download(update) { }
         assertEquals(network.digest, UpdateFiles.sha256(file)); assertTrue(network.streamClosed)
         val intent = client.installIntent(file)
@@ -86,7 +88,7 @@ class UpdateFlowTest {
         assertEquals("content", intent.data?.scheme); assertEquals("dev.localphone.agent.updates", intent.data?.authority)
         assertTrue(intent.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
         assertNotNull(intent.component)
-        assertEquals(5, context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toInt())
+        assertEquals(BuildConfig.VERSION_CODE, context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toInt())
         val info = context.packageManager.getApplicationInfo(intent.component!!.packageName, 0)
         assertTrue(info.flags and (android.content.pm.ApplicationInfo.FLAG_SYSTEM or android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0)
     }
@@ -125,18 +127,18 @@ class UpdateFlowTest {
             assertTrue(activity.findViewById<android.widget.TextView>(R.id.update_notes).text.toString().contains("변경 내용"))
             assertEquals("업데이트 설치", activity.findViewById<android.widget.Button>(R.id.update_button).text.toString())
         }
-        assertEquals(5, context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toInt())
+        assertEquals(BuildConfig.VERSION_CODE, context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toInt())
     }
     @Test fun verifiedUpdateOpensActualSystemConfirmationWithoutSilentInstallation() {
         device.executeShellCommand("appops set dev.localphone.agent REQUEST_INSTALL_PACKAGES allow")
         val network = FixtureTransport(fixture); launchSettings(network)
         await { assertTrue("Actual system installer: ${device.currentPackageName}", device.currentPackageName?.contains("packageinstaller") == true) }
         await { assertTrue(device.hasObject(androidx.test.uiautomator.By.textContains("Local Phone Agent"))) }
-        assertEquals(5, context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toInt())
+        assertEquals(BuildConfig.VERSION_CODE, context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toInt())
         val evidence = File(context.getExternalFilesDir("emulator-evidence"), "update-installer.txt").apply { parentFile!!.mkdirs() }
-        evidence.writeText("ACTUAL_ANDROID_INSTALLER_CONFIRMATION\ninstalled_version_code=5\nverified_fixture_version_code=6\nNo confirmation pressed. Not a physical S25 / Play Protect verdict.\n")
+        evidence.writeText("ACTUAL_ANDROID_INSTALLER_CONFIRMATION\ninstalled_version_code=${BuildConfig.VERSION_CODE}\nverified_fixture_version_code=${BuildConfig.VERSION_CODE + 1}\nNo confirmation pressed. Not a physical S25 / Play Protect verdict.\n")
         device.pressBack()
         await { assertEquals(context.packageName, device.currentPackageName) }
-        assertEquals(5, context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toInt())
+        assertEquals(BuildConfig.VERSION_CODE, context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toInt())
     }
 }

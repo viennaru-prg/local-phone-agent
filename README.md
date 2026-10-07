@@ -1,11 +1,12 @@
-# Local Phone Agent 0.5.0 — 목표 우선 실행
+# Local Phone Agent 0.5.1 — 목표 우선 실행
 
 현재 수정판은 **LocalPhoneAgent-automation.apk**입니다. UserPlaces, 앱별 설정과 등록된 Tool은 빠른 실행 경로입니다. 없어도 원래 명령을 유지하고, Android API·Intent·Deep Link가 해결하지 못한 부분은 사용자가 연결한 AccessibilityService로 실제 앱 화면에서 이어갑니다. 내비와 음악은 예시이며 제품의 전체 범위를 제한하지 않습니다.
 
 ## 달라진 동작
 
 - `지도 켜줘`: 설치된 지도 앱의 launcher를 열며 장소·검색 API·화면 작업 연결을 요구하지 않습니다. 네이버지도가 있으면 우선합니다.
-- `회사로 가자`: 로컬 회사가 없으면 네이버지도에서 저장 장소·회사 바로가기·저장 장소 검색·앱 검색을 시도합니다. 목적지를 선택하고 경로·안내 시작을 조작한 뒤 주행 화면의 실제 안내 상태를 확인합니다.
+- `회사로 가자`: 로컬 회사가 없으면 네이버지도에서 MY/즐겨찾기 안의 **집/회사** 전용 등록을 먼저 확인하고, **자주 가는 곳**·일반 저장 장소·저장 장소 검색·앱 검색으로 이어갑니다. 목적지를 선택하고 경로·안내 시작을 조작한 뒤 주행 화면의 실제 안내 상태를 확인합니다.
+- `테스트치과로 가자`, `본가로 가자`처럼 다른 목적지도 공식 경로가 해결하지 못하면 **자주 가는 곳** 등 네이버 개인 장소 영역을 탐색합니다. 가로 탭과 세로 장소 목록을 구분하며 등록하기 버튼을 목적지로 선택하지 않습니다.
 - 같은 이름의 실제 후보가 여러 개이거나 공개 검색의 ‘회사’가 개인의 회사인지 확정할 수 없을 때만 후보를 선택하게 합니다. 회사가 로컬 DB에 없다는 이유로 먼저 질문하지 않습니다.
 - 안내 시작을 확인한 뒤에만 목적지 참조를 선택적으로 암호화해 기억합니다. 화면에 명시된 목적지 좌표가 있을 때만 Local UserPlaces에 저장합니다. 좌표가 없는 경우 이름·주소 참조만 저장하며 좌표를 만들지 않습니다.
 - `앱이름에서 알림 메뉴 눌러줘`, `앱이름에서 테스트역 검색해줘`: 해당 앱별 Tool·selector 등록 없이 설치 앱 이름과 관측한 화면을 사용합니다.
@@ -15,7 +16,7 @@
 
 1. `LocalPhoneAgent-automation.apk` 하나를 설치합니다. instrumentation APK와 지도 테스트 fixture는 사용자 휴대폰에 설치하지 않습니다.
 2. 첫 실행에서 마이크를 허용합니다. 기본 launcher는 짧은 음성 호출 창에서 자동으로 듣습니다. 작은 설정 버튼으로 여는 수동 홈에는 가운데 마이크와 인식 애니메이션만 둡니다.
-3. 화면 작업이 필요하면 설정의 **화면 작업 연결**에서 설명에 동의한 뒤 Android 접근성 설정에서 **Local Phone Agent 화면 작업** 서비스를 한 번 직접 켭니다. 앱이 접근성을 스스로 허용하지 않습니다. 장소·네이버 검색 API·앱별 Tool 설정은 필요하지 않습니다.
+3. 화면 작업이 필요하면 설정의 **화면 작업 연결**에서 설명에 동의한 뒤 Android 접근성 설정에서 **Local Phone Agent 화면 작업** 서비스를 한 번 직접 켭니다. Android에서 ‘앱의 액세스가 거부됨’이 나오면 앱 정보 → ⋮ → 제한된 설정 허용을 직접 완료하고 접근성에서 다시 켭니다. 앱이 접근성을 스스로 허용하지 않습니다. 장소·네이버 검색 API·앱별 Tool 설정은 필요하지 않습니다.
 4. 대상 앱의 로그인과 위치 권한 등은 그 앱에서 준비합니다. 실행 중 화면 작업 창의 **작업 취소**로 멈출 수 있습니다.
 5. 삼성 보안폴더에서 사용할 때는 Agent와 대상 앱을 같은 공간에 추가하고 그 공간에서 권한을 허용합니다. 다른 프로필의 앱·세션으로 넘기지 않습니다. 실제 Knox 접근성·알림 접근 지원 여부는 S25에서 미검증입니다.
 
@@ -49,6 +50,6 @@ python scripts/prepare-assets.py
 
 전체 개발판 검사: `:app:assembleDebug :app:assembleDebugAndroidTest`로 빌드합니다. `testBuildType`별 instrumentation task는 서로 다른 Gradle 호출에서 빌드합니다. 과거 제한판 `install`은 화면 작업과 알림 listener를 제외하며, 이 요청에 사용하는 build type은 `automation`입니다.
 
-Android 15 전용 AVD에서 실제 OS 접근성 서비스가 별도의 테스트 앱을 조작하도록 검사했습니다. NAVER 패키지/URI를 흉내 내는 fixture는 **실제 네이버지도 앱이 아닙니다**. fixture는 testOnly이고 자동 검사는 소유한 AVD만 사용합니다. 실제 S25·Knox·RegiStar·네이버 UI·차량/Bluetooth·일반 배포 승인은 별도 미검증입니다. 0.5.0의 최종 설치 APK와 검증 결과는 상위 폴더 `update-verification.json` 및 `automation-test/update-shipping.json`입니다. 코어 74개와 설치판 Android 40개가 통과했습니다. 0.4.0의 기록은 `automation-verification.json` 및 `history/0.4.0`에 남아 있습니다. 과거 검사 수와 중복 합산하지 않습니다.
+Android 15 전용 AVD에서 실제 OS 접근성 서비스가 별도의 테스트 앱을 조작하도록 검사했습니다. NAVER 패키지/URI를 흉내 내는 fixture는 **실제 네이버지도 앱이 아닙니다**. fixture는 testOnly이고 자동 검사는 소유한 AVD만 사용합니다. 실제 S25 일반 영역에서 0.5.0 USB 설치·사용자 접근성 활성화와 네이버의 집/회사·자주 가는 곳 탭 구조를 확인했습니다. 이번 자동 회귀 검사는 별도 테스트 앱이며 실제 네이버 안내 시작·Knox·RegiStar·차량/Bluetooth·파일 설치의 Play 프로텍트 승인과 구분합니다. 0.5.1의 최종 설치 APK와 검사 결과는 상위 폴더 `update-verification.json` 및 `automation-test/personal-nav-shipping.json`에 기록합니다. 이전 0.5.0은 코어 74개·Android 40개를 통과했고 0.5.1은 코어 82개·Android 49개를 통과했습니다. 0.4.0의 기록은 `automation-verification.json` 및 `history/0.4.0`에 남아 있습니다. 과거 검사 수와 중복 합산하지 않습니다.
 
 세부 설계는 [ARCHITECTURE.md](ARCHITECTURE.md), 사용·검증 안내는 [docs/goal-ui-fallback.txt](docs/goal-ui-fallback.txt)에 있습니다. `model-contract`의 예시는 계약용 샘플이며 실제 모델 학습·성능 검증 자료가 아닙니다.

@@ -11,6 +11,12 @@ class ReceiverActivity : Activity() {
     private val mode get() = prefs.getString("mode", "legacy")!!
     private lateinit var body: LinearLayout
     private var destination = "회사"
+    @Suppress("DEPRECATION") override fun onBackPressed() {
+        when (prefs.getString("screen", "")) {
+            "saved", "home_work", "frequent", "my" -> { count("back_actions"); render() }
+            else -> super.onBackPressed()
+        }
+    }
     override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); render() }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); render() }
     private fun count(key: String) { prefs.edit().putInt(key, prefs.getInt(key, 0) + 1).commit() }
@@ -37,17 +43,69 @@ class ReceiverActivity : Activity() {
         page("map")
         text("지도")
         button("저장") { count("saved_clicks"); saved() }
+        if (mode == "my_favorites") button("MY") { count("my_clicks"); page("my"); button("즐겨찾기") { count("favorites_clicks"); personal("home_work") } }
         button("검색") { searchInput(false) }
         button("알림 메뉴") { count("generic_clicks"); page("notifications"); text("알림 메뉴"); text("알림 설정 화면") }
     }
     private fun saved() {
         page("saved"); text("저장 장소")
+        if (mode.startsWith("personal_") || mode.startsWith("frequent_") || mode == "my_favorites") {
+            personalTabs()
+            if (mode == "personal_priority") place("회사", "서울시 다른즐겨찾기로 99", 36.999999, 128.999999)
+            else text("일반 즐겨찾기 목록에는 목적지 없음")
+            return
+        }
         when (mode) {
             "saved_search" -> { text("저장 목록"); searchInput(true, preserve = true) }
             "public_search", "public_office" -> text("저장한 장소 없음")
             "ambiguous_office" -> { place("회사", "서울시 테스트로 11", 36.111111, 128.111111); place("회사", "서울시 테스트로 22", 36.222222, 128.222222) }
             "saved_office", "failed_navigation", "no_coordinates" -> place("회사", "서울시 테스트로 11", 36.111111, 128.111111)
             else -> text("저장한 장소 없음")
+        }
+    }
+    /** Reproduce the observed unlabelled clickable Compose parent / labelled child shape. */
+    private fun composeTab(label: String, detail: String? = null, click: () -> Unit) {
+        val target = LinearLayout(this).apply { isClickable = true; isFocusable = true; setPadding(8, 8, 8, 8)
+            addView(TextView(this@ReceiverActivity).apply { text = label; textSize = 18f })
+            detail?.let { addView(TextView(this@ReceiverActivity).apply { text = it }) }
+            setOnClickListener { click() }
+        }
+        body.addView(target)
+    }
+    private fun personalTabs() {
+        val tabs = HorizontalScrollView(this)
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        tabs.addView(row)
+        for ((label, area) in listOf("집/회사" to "home_work", "자주 가는 곳" to "frequent", "장소" to "saved")) {
+            row.addView(LinearLayout(this).apply {
+                isClickable = true; isFocusable = true; setPadding(28, 16, 28, 16)
+                addView(TextView(this@ReceiverActivity).apply { text = label; textSize = 18f })
+                setOnClickListener { count(area + "_clicks"); if (area == "saved") saved() else personal(area) }
+            })
+        }
+        body.addView(tabs)
+    }
+    private fun personal(area: String) {
+        page(area); text("즐겨찾기"); personalTabs()
+        if (area == "home_work") {
+            if (mode in listOf("personal_priority", "personal_home", "my_favorites")) {
+                place("집", "서울시 합성집로 10", 36.101010, 128.101010)
+                place("회사", "서울시 전용회사로 20", 36.202020, 128.202020)
+            } else {
+                composeTab("회사", "등록") { count("registration_clicks"); page("registration"); text("회사 등록"); text("주소 검색") }
+                text("회사 등록")
+            }
+        } else {
+            when (mode) {
+                "frequent_office" -> place("회사", "서울시 자주가는회사로 30", 36.303030, 128.303030)
+                "frequent_named" -> place("테스트치과", "서울시 자주가는치과로 40", 36.404040, 128.404040)
+                "frequent_duplicate" -> { place("본가", "서울시 합성본가로 50", 36.505050, 128.505050); place("본가", "서울시 합성본가로 60", 36.606060, 128.606060) }
+                "frequent_scroll" -> {
+                    repeat(14) { text("합성 장소 $it").apply { height = 130 } }
+                    place("테스트치과", "서울시 목록아래로 70", 36.707070, 128.707070)
+                }
+                else -> text("자주 가는 곳에 목적지 없음")
+            }
         }
     }
     private fun searchInput(personal: Boolean, preserve: Boolean = false) {
@@ -64,7 +122,7 @@ class ReceiverActivity : Activity() {
         when {
             mode == "saved_search" && personal && query == "회사" -> place("회사", "서울시 테스트로 11", 36.111111, 128.111111)
             mode == "public_search" && query == "테스트역" -> place("테스트역", "서울시 테스트로 33", 36.333333, 128.333333)
-            mode == "public_office" && !personal && query == "회사" -> place("회사", "서울시 공공검색로 99", 36.444444, 128.444444)
+            mode in listOf("public_office", "personal_missing") && !personal && query == "회사" -> place("회사", "서울시 공공검색로 99", 36.444444, 128.444444)
             mode == "no_coordinates" && query == "회사" -> place("회사", "서울시 테스트로 11", 36.111111, 128.111111)
             else -> text("검색 결과 없음")
         }

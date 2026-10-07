@@ -9,15 +9,15 @@
 ## 다음 버전 배포
 
 1. 기존 설치판의 개인 서명 키를 보관합니다. 키를 Git에 올리지 않습니다. 자동으로 생성한 다른 debug key로 만든 APK는 기존 앱의 업데이트가 될 수 없습니다.
-2. versionCode를 단조 증가시키고 버전을 지정합니다. 예: `:app:assembleAutomation -PreleaseVersionCode=6 -PreleaseVersionName=0.5.1`. Gradle을 실행할 때 기존 키가 있는 ANDROID_USER_HOME 또는 별도 signing 설정을 유지해야 합니다.
+2. versionCode를 단조 증가시키고 버전을 지정합니다. 예: `:app:assembleAutomation -PreleaseVersionCode=7 -PreleaseVersionName=0.5.2`. Gradle을 실행할 때 기존 키가 있는 ANDROID_USER_HOME 또는 별도 signing 설정을 유지해야 합니다.
 3. 패키지 `dev.localphone.agent`, 버전 및 기존 서명을 확인하고 검사를 실행합니다. 실제 배포할 APK의 검사 해시를 기록합니다.
 4. 파일 이름을 `LocalPhoneAgent-automation.apk`로 복사한 후 다음 명령으로 `update.json`을 만듭니다.
 
 ```powershell
-python scripts/make-update-manifest.py --apk LocalPhoneAgent-automation.apk --version-code 6 --version 0.5.1
+python scripts/make-update-manifest.py --apk LocalPhoneAgent-automation.apk --version-code 7 --version 0.5.2
 ```
 
-5. 해당 검증 commit의 `v0.5.1` GitHub Release를 draft로 만들고 APK와 update.json을 모두 첨부합니다. 변경 내용은 Release 본문에 적습니다.
+5. 해당 검증 commit의 `v0.5.2` GitHub Release를 draft로 만들고 APK와 update.json을 모두 첨부합니다. 변경 내용은 Release 본문에 적습니다.
 6. 모든 첨부의 업로드와 SHA-256을 확인한 뒤 draft를 공개 정식 Release로 전환하고 latest로 지정합니다. prerelease·draft는 앱이 사용하지 않습니다. 이미 배포한 버전의 파일을 바꾸는 대신 새 versionCode를 발급합니다.
 
 GitHub CI는 소스 빌드·core 검사·lint를 수행하며 배포 키가 없는 CI의 임시 debug APK를 Release에 올리지 않습니다. 100 MiB를 넘는 한국어 encoder와 음성 AAR는 Git에 넣지 않고 `scripts/prepare-assets.py`가 speech-model.json의 고정 주소·크기·SHA-256으로 준비합니다. 설치 APK에는 음성 모델이 포함됩니다.

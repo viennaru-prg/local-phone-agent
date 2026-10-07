@@ -1,0 +1,23 @@
+name: Android checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Prepare pinned offline speech inputs
+        run: python3 scripts/prepare-assets.py
+      - name: Compile and verify
+        run: bash gradlew :core:test :app:assembleAutomation :app:lintAutomation --no-daemon
+      # Distribution requires the existing private signing key. CI does not publish its generated debug key.

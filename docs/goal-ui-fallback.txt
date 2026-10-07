@@ -1,0 +1,86 @@
+Local Phone Agent 0.4.0 — 목표 우선 실행과 화면 작업 안내
+작성일: 2026-10-08 KST
+
+현재 휴대폰에 설치할 파일: LocalPhoneAgent-automation.apk
+이 APK 하나를 설치합니다. instrumentation APK와 지도 테스트 fixture는 일반 사용 파일이 아닙니다.
+소스: LocalPhoneAgent-automation-source.zip / outputs/LocalPhoneAgent
+과거 LocalPhoneAgent-install.apk는 권한 축소 제한판이며 이번 수정의 대체물이 아닙니다.
+
+핵심 수정
+UserPlaces·앱별 설정·등록된 Tool은 빠른 경로이며 작업 수행의 필수조건이 아닙니다.
+사용자의 원래 목표를 유지하고 Android API/Intent/Deep Link 뒤의 미해결 작업을 실제 앱 화면에서 이어갑니다.
+앱 이름으로 실행하거나 화면의 버튼 선택·검색을 하려면 앱별 Tool이나 selector를 등록할 필요가 없습니다.
+직접 처리하지 못하는 목표는 perform_app_task와 선택적인 로컬 UI planner로 연결합니다.
+경유처럼 단일 목적지 Intent의 표현 범위를 넘는 명령도 원래 목표를 유지합니다.
+
+사용 예
+지도 켜줘: 해당 설치 공간의 지도 앱만 실행. 장소·네이버 검색 API·접근성·로컬 모델이 필요하지 않습니다.
+회사로 가자: 로컬 회사가 없으면 네이버지도 저장 장소·저장 장소 검색·앱 검색을 사용합니다.
+목적지를 고르고 도착/길찾기·자동차 경로·안내 시작을 누른 뒤 실제 안내 상태를 관측합니다.
+안내 시작 클릭을 받았다는 사실이나 경로 미리보기만으로 성공 처리하지 않습니다.
+성공 후만 이름·주소 참조와 명시된 목적지 좌표를 선택적으로 암호화해 기억합니다.
+좌표가 보이지 않으면 이름·주소 참조만 캐시하고 좌표를 만들지 않습니다. 기존 수동 장소를 덮어쓰지 않습니다.
+장소 기억을 꺼도 작업은 수행합니다. 회사가 없다는 이유로 먼저 장소 등록을 요구하지 않습니다.
+중복 장소·앱의 실제 후보나 공개 검색의 회사 정체성이 모호할 때 선택하게 합니다.
+모든 자동 해결 경로가 실패하면 실제 장소명이나 주소 등을 요청합니다.
+앱이름에서 알림 메뉴 눌러줘 / 앱이름에서 테스트역 검색해줘: 실제 설치 앱 이름과 화면의 요소를 사용합니다.
+
+첫 사용
+1. APK를 삼성 내 파일 등에서 열어 설치하고 첫 실행에서 마이크를 허용합니다.
+2. 기본 앱 실행은 작은 자동 음성 호출 창입니다. 수동 홈은 작은 설정 버튼을 통해 열 수 있습니다.
+3. 화면 조작을 쓰려면 설정 → 화면 작업 연결에서 설명에 동의하고 Android 접근성 설정에서
+   Local Phone Agent 화면 작업 서비스를 한 번 직접 켭니다. 앱이 권한을 스스로 허용하지 않습니다.
+4. 같은 설치 공간에 네이버지도 등 대상 앱을 설치하고 해당 앱의 로그인·위치 권한은 그 앱에서 준비합니다.
+5. 화면 작업 창의 작업 취소를 누르면 후속 클릭·안내·캐시를 중단합니다.
+6. 보안폴더에서 쓰려면 Agent와 대상 앱 모두 그 안에 추가하고 해당 공간에서 권한을 허용합니다.
+   실제 Knox의 접근성·알림 접근 허용 여부는 S25에서 아직 확인하지 못했습니다.
+
+마이크·화면 원문은 외부 AI로 전송하지 않고 녹음·스크린샷을 저장하지 않습니다.
+명령 대상의 현재 화면을 일시 처리하며, 명령이 없는 동안 화면 내용을 수집하지 않습니다.
+검증된 목적지의 선택적 암호화 캐시는 별도입니다. 캐시 끄기는 새 기록을 막으며 기존 장소의 삭제는 장소 관리에서 합니다.
+비밀번호·인증·결제·권한 승인 화면은 조작하지 않습니다. 다른 프로필의 앱·세션으로 넘기지 않습니다.
+
+검증 결과
+core JVM 66개 PASS. debug Android 전체 58개 PASS. 실패/건너뜀 0.
+실제 설치용 nondebug automation APK에서도 33개 PASS. 이 검사는 앞의 Android 검사와 중복되므로 합산하지 않습니다.
+Android 15 전용 AVD에서 실제 OS 접근성 서비스가 별도 테스트 앱의 실제 Views를 조작했습니다.
+장소 없는 앱 실행, 회사 저장 목록/검색, 안내 시작 증거, 실제 모호한 후보 선택,
+실패한 start click의 성공/캐시 방지, 좌표 없는 참조, cache off, 등록되지 않은 앱의 버튼/검색,
+stale node의 잘못된 클릭 방지, 음성 화면→앱 전환 유지, 취소·중복 결과를 검사했습니다.
+시계·설정 앱의 실제 Intent와 Room/Keystore, 오프라인 합성 한국어 WAV의 실제 STT도 검사했습니다.
+설치 APK의 해시는 shipping 테스트 기록과 일치하며 서명 v2·ZIP CRC·16 KiB ZIP 패키지 정렬을 확인했습니다.
+16 KiB page-size 실기 호환성 검사나 Google 승인 검사가 아닙니다.
+
+확인하지 못한 범위
+지도 fixture는 네이버 패키지와 URI 계약을 흉내 낸 testOnly 앱입니다. 실제 네이버지도 UI 성공을 확인한 것은 아닙니다.
+실제 S25 설치 승인·Google Play 프로텍트·Knox 보안폴더·RegiStar·차량/Bluetooth는 미검증입니다.
+음악 UI fallback은 구현했지만 이번 검사에서 실제 음악 앱과 소리를 검증하지 않았습니다.
+등록된 도구 밖의 복잡한 화면 계획에는 로컬 FunctionGemma 가중치를 가져와야 하며 가중치는 APK에 없습니다.
+다음 UI 동작을 로컬로 계획하는 코드·스키마는 구현했지만 실제 모델의 계획 품질과 성능은 미검증입니다.
+명시적인 버튼 선택·검색·지도 의미 규칙은 모델이 없어도 먼저 시도합니다.
+
+이 화면 작업판은 접근성 서비스와 음악용 알림 listener를 명시적으로 포함합니다.
+이전 Play 프로텍트 차단이 해소되었다고 주장하지 않습니다. 보호 기능을 끄거나 권한을 숨기지 않습니다.
+일반 Google Play 배포 정책 승인도 확인하지 않았습니다.
+
+검증 기록
+automation-verification.json
+automation-test/goal-shipping.json 및 goal-shipping.xml
+emulator-test/goal-regression-final.json 및 goal-regression-final.xml
+소스 재빌드: gradlew.bat :core:test :app:assembleAutomation :app:lintAutomation
+테스트 APK 빌드: gradlew.bat :app:assembleAutomationAndroidTest -PtestBuildType=automation
+test-map-receiver는 소유한 전용 AVD에서만 쓰는 테스트 fixture입니다. 실제 휴대폰에 설치하지 않습니다.
+
+공식 참고
+Android 접근성 서비스와 사용자의 직접 허용:
+https://developer.android.com/reference/android/accessibilityservice/AccessibilityService
+관측 요소의 ACTION_CLICK 등:
+https://developer.android.com/reference/android/view/accessibility/AccessibilityNodeInfo
+네이버 map/search/navigation Deep Link:
+https://guide.ncloud-docs.com/docs/en/maps-url-scheme
+네이버 저장 장소의 집/회사:
+https://help.naver.com/service/5637/contents/8301?lang=ko&osType=MOBILE
+Google Play 프로텍트의 민감 권한 사이드로드 안내:
+https://developers.google.com/android/play-protect/warning-dev-guidance?hl=en
+Google Play 접근성 API 정책:
+https://support.google.com/googleplay/android-developer/answer/10964491?hl=en

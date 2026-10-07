@@ -1,0 +1,23 @@
+{"utterance": "집으로 가자", "tool_calls": [{"name": "navigate", "arguments": {"destination": "집"}}]}
+{"utterance": "우리집 가자", "tool_calls": [{"name": "navigate", "arguments": {"destination": "우리집"}}]}
+{"utterance": "회사로 가자", "tool_calls": [{"name": "navigate", "arguments": {"destination": "회사"}}]}
+{"utterance": "직장으로 네비 찍어", "tool_calls": [{"name": "navigate", "arguments": {"destination": "직장"}}]}
+{"utterance": "본가로 가자", "tool_calls": [{"name": "navigate", "arguments": {"destination": "본가"}}]}
+{"utterance": "수원역 가자", "tool_calls": [{"name": "navigate", "arguments": {"destination": "수원역"}}]}
+{"utterance": "스타벅스 가자", "tool_calls": [{"name": "navigate", "arguments": {"destination": "스타벅스"}}]}
+{"utterance": "집으로 네비 찍고 노래 재생해줘", "tool_calls": [{"name": "navigate", "arguments": {"destination": "집"}}, {"name": "media_resume", "arguments": {}}]}
+{"utterance": "노래 재생해줘", "tool_calls": [{"name": "media_resume", "arguments": {}}]}
+{"utterance": "시계 앱 열어줘", "tool_calls": [{"name": "open_app", "arguments": {"app_name": "시계"}}]}
+{"utterance": "계산기 앱 열어줘", "tool_calls": [{"name": "open_app", "arguments": {"app_name": "계산기"}}]}
+{"utterance": "오전 7시 30분 알람 맞춰줘", "tool_calls": [{"name": "set_alarm", "arguments": {"hour": 7, "minute": 30}}]}
+{"utterance": "오후 7시 알람 맞춰줘", "tool_calls": [{"name": "set_alarm", "arguments": {"hour": 19, "minute": 0}}]}
+{"utterance": "5분 타이머 시작해줘", "tool_calls": [{"name": "set_timer", "arguments": {"seconds": 300}}]}
+{"utterance": "와이파이 설정 열어줘", "tool_calls": [{"name": "open_settings", "arguments": {"page": "wifi"}}]}
+{"utterance": "블루투스 설정 열어줘", "tool_calls": [{"name": "open_settings", "arguments": {"page": "bluetooth"}}]}
+{"utterance": "노래 멈춰", "tool_calls": [{"name": "media_pause", "arguments": {}}]}
+{"utterance": "노래 꺼", "tool_calls": [{"name": "media_pause", "arguments": {}}]}
+{"utterance": "다음 곡", "tool_calls": [{"name": "media_next", "arguments": {}}]}
+{"utterance": "다음 곡 틀어", "tool_calls": [{"name": "media_next", "arguments": {}}]}
+{"utterance": "다음 노래 틀어", "tool_calls": [{"name": "media_next", "arguments": {}}]}
+{"utterance": "음악 앱에서 현재 노래 저장해줘", "tool_calls": [{"name": "perform_app_task", "arguments": {"app_name": "음악", "goal": "현재 노래 저장해줘"}}]}
+{"utterance": "지도에서 테스트역 검색해줘", "tool_calls": [{"name": "perform_app_task", "arguments": {"app_name": "지도", "goal": "테스트역 검색해줘"}}]}

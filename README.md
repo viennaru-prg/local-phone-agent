@@ -1,0 +1,54 @@
+# Local Phone Agent 0.5.0 — 목표 우선 실행
+
+현재 수정판은 **LocalPhoneAgent-automation.apk**입니다. UserPlaces, 앱별 설정과 등록된 Tool은 빠른 실행 경로입니다. 없어도 원래 명령을 유지하고, Android API·Intent·Deep Link가 해결하지 못한 부분은 사용자가 연결한 AccessibilityService로 실제 앱 화면에서 이어갑니다. 내비와 음악은 예시이며 제품의 전체 범위를 제한하지 않습니다.
+
+## 달라진 동작
+
+- `지도 켜줘`: 설치된 지도 앱의 launcher를 열며 장소·검색 API·화면 작업 연결을 요구하지 않습니다. 네이버지도가 있으면 우선합니다.
+- `회사로 가자`: 로컬 회사가 없으면 네이버지도에서 저장 장소·회사 바로가기·저장 장소 검색·앱 검색을 시도합니다. 목적지를 선택하고 경로·안내 시작을 조작한 뒤 주행 화면의 실제 안내 상태를 확인합니다.
+- 같은 이름의 실제 후보가 여러 개이거나 공개 검색의 ‘회사’가 개인의 회사인지 확정할 수 없을 때만 후보를 선택하게 합니다. 회사가 로컬 DB에 없다는 이유로 먼저 질문하지 않습니다.
+- 안내 시작을 확인한 뒤에만 목적지 참조를 선택적으로 암호화해 기억합니다. 화면에 명시된 목적지 좌표가 있을 때만 Local UserPlaces에 저장합니다. 좌표가 없는 경우 이름·주소 참조만 저장하며 좌표를 만들지 않습니다.
+- `앱이름에서 알림 메뉴 눌러줘`, `앱이름에서 테스트역 검색해줘`: 해당 앱별 Tool·selector 등록 없이 설치 앱 이름과 관측한 화면을 사용합니다.
+- 음악 설정과 MediaSession도 선택적인 빠른 경로입니다. 현재 세션을 사용할 수 없으면 해당 설치 공간의 실제 음악 앱을 찾아 화면 컨트롤을 시도합니다. 여러 음악 앱의 대상이 불분명하면 선택이 필요합니다.
+
+## 설치와 시작
+
+1. `LocalPhoneAgent-automation.apk` 하나를 설치합니다. instrumentation APK와 지도 테스트 fixture는 사용자 휴대폰에 설치하지 않습니다.
+2. 첫 실행에서 마이크를 허용합니다. 기본 launcher는 짧은 음성 호출 창에서 자동으로 듣습니다. 작은 설정 버튼으로 여는 수동 홈에는 가운데 마이크와 인식 애니메이션만 둡니다.
+3. 화면 작업이 필요하면 설정의 **화면 작업 연결**에서 설명에 동의한 뒤 Android 접근성 설정에서 **Local Phone Agent 화면 작업** 서비스를 한 번 직접 켭니다. 앱이 접근성을 스스로 허용하지 않습니다. 장소·네이버 검색 API·앱별 Tool 설정은 필요하지 않습니다.
+4. 대상 앱의 로그인과 위치 권한 등은 그 앱에서 준비합니다. 실행 중 화면 작업 창의 **작업 취소**로 멈출 수 있습니다.
+5. 삼성 보안폴더에서 사용할 때는 Agent와 대상 앱을 같은 공간에 추가하고 그 공간에서 권한을 허용합니다. 다른 프로필의 앱·세션으로 넘기지 않습니다. 실제 Knox 접근성·알림 접근 지원 여부는 S25에서 미검증입니다.
+
+0.3.0의 `LocalPhoneAgent-install.apk`는 알림 listener를 제외한 과거 제한판입니다. 이번 목표 우선 실행판의 대체물이 아닙니다. 0.4.0 화면 작업판은 접근성 서비스와 음악용 알림 listener를 명시적으로 포함합니다. 이전 기기의 Google Play 프로텍트 차단이 새 APK에서 해소되었다고 확인한 것은 아닙니다. 보호 기능을 끄거나 권한을 숨기는 설치 절차를 제공하지 않습니다.
+
+## 앱 안에서 업데이트
+
+설정 → **업데이트 확인**을 누릅니다. GitHub 최신 정식 Release에 더 높은 versionCode가 있으면 변경 내용을 표시하며 APK를 자동으로 받고 검사를 거쳐 Android 설치 화면을 엽니다. 처음에는 Android의 이 앱 설치 허용이 필요하고 최종 설치는 사용자가 시스템 화면에서 승인합니다. 백그라운드에서 수시로 확인하지 않습니다.
+
+APK 크기·SHA-256·패키지·버전·현재 앱과 같은 서명을 검사합니다. draft·prerelease·낮은 versionCode·다른 저장소의 주소는 사용하지 않습니다. APK에 GitHub 토큰이나 개인 서명 키를 넣지 않습니다. 상세 배포 절차와 데이터 보존은 [GitHub 업데이트 안내](docs/github-updates.md)에 있습니다.
+
+## 로컬 처리와 범위
+
+한국어 음성 인식은 APK에 포함된 sherpa-onnx Zipformer로 실행합니다. 음성과 화면 원문을 외부 AI로 보내지 않고 녹음·스크린샷을 저장하지 않습니다. 앱 이름 조회와 화면 처리는 현재 설치 공간에서만 수행합니다. 명령 중에만 UI를 읽고 작업하며, 그 외 접근성 이벤트에서 화면 내용을 수집하지 않습니다. 성공한 목적지의 선택적 캐시와 debug의 암호화된 마지막 실행 기록은 별도입니다.
+
+등록된 함수에 맞는 명령은 빠른 경로로 처리합니다. 함수가 맞지 않는 명령은 `perform_app_task(app_name, goal)`로 원래 목표를 유지합니다. 직접 버튼 선택·검색·네이버 내비의 의미 기반 UI 경로는 모델 없이 시도합니다. 다른 복잡한 목표는 가져온 로컬 FunctionGemma 모델에 현재 화면을 제공해 다음 동작을 반복 계획하는 경로가 있습니다. **해당 모델의 가중치는 포함되어 있지 않고 실제 FunctionGemma 추론은 미검증입니다.** 모델이 없다고 이미 가능한 앱 실행·검색·화면 조작을 먼저 막지는 않습니다. 모든 앱·복잡한 명령을 현재 완성했다고 주장하지 않습니다.
+
+네이버 공개 검색 API 키는 선택 사항이며, 없으면 네이버지도 자체 검색을 사용합니다. 설정한 REST 검색에는 공개 장소 검색어가 전송됩니다. 네이버지도 등 대상 앱의 자체 통신은 그 앱이 담당합니다.
+
+화면 작업은 동일한 설치 공간의 명령 대상 앱으로 제한합니다. 비밀번호·인증·결제·권한 승인 화면을 조작하지 않습니다. 클릭 직전에 현재 요소의 이름·역할·하위 항목을 다시 확인합니다. 탐색은 시간·동작 횟수를 제한하고 취소·잠금·다른 앱으로의 이탈을 검사합니다. 화면의 문구는 관측 데이터이며 새 명령이나 권한 부여로 취급하지 않습니다.
+
+## 빌드와 검증
+
+JDK 21, Android SDK 35, Gradle 8.11.1이 필요합니다. SDK 경로는 로컬 `local.properties` 또는 ANDROID_HOME으로 지정합니다.
+
+```powershell
+python scripts/prepare-assets.py
+./gradlew.bat :core:test :app:assembleAutomation :app:lintAutomation
+./gradlew.bat :app:assembleAutomationAndroidTest -PtestBuildType=automation
+```
+
+전체 개발판 검사: `:app:assembleDebug :app:assembleDebugAndroidTest`로 빌드합니다. `testBuildType`별 instrumentation task는 서로 다른 Gradle 호출에서 빌드합니다. 과거 제한판 `install`은 화면 작업과 알림 listener를 제외하며, 이 요청에 사용하는 build type은 `automation`입니다.
+
+Android 15 전용 AVD에서 실제 OS 접근성 서비스가 별도의 테스트 앱을 조작하도록 검사했습니다. NAVER 패키지/URI를 흉내 내는 fixture는 **실제 네이버지도 앱이 아닙니다**. fixture는 testOnly이고 자동 검사는 소유한 AVD만 사용합니다. 실제 S25·Knox·RegiStar·네이버 UI·차량/Bluetooth·일반 배포 승인은 별도 미검증입니다. 0.5.0의 최종 설치 APK와 검증 결과는 상위 폴더 `update-verification.json` 및 `automation-test/update-shipping.json`입니다. 코어 74개와 설치판 Android 40개가 통과했습니다. 0.4.0의 기록은 `automation-verification.json` 및 `history/0.4.0`에 남아 있습니다. 과거 검사 수와 중복 합산하지 않습니다.
+
+세부 설계는 [ARCHITECTURE.md](ARCHITECTURE.md), 사용·검증 안내는 [docs/goal-ui-fallback.txt](docs/goal-ui-fallback.txt)에 있습니다. `model-contract`의 예시는 계약용 샘플이며 실제 모델 학습·성능 검증 자료가 아닙니다.

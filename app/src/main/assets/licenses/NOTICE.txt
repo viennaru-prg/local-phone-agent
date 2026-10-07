@@ -1,0 +1,4 @@
+Local Korean speech recognition: sherpa-onnx by the k2-fsa contributors (Apache-2.0).
+Model converted by k2-fsa from John Bamma, trained with icefall on KsponSpeech.
+Upstream model is Apache-2.0; see Korean-model-card.md. Model files are unchanged.
+https://github.com/k2-fsa/sherpa-onnx

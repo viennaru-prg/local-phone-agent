@@ -1,0 +1,13 @@
+.gradle/
+.kotlin/
+**/build/
+local.properties
+*.litertlm
+*.keystore
+*.jks
+.idea/
+**/*.onnx
+app/libs/*.aar
+*.apk
+*.part
+__pycache__/

@@ -1,0 +1,17 @@
+<resources>
+    <item name="invocation_status" type="id" />
+    <item name="invocation_cancel" type="id" />
+    <item name="invocation_settings" type="id" />
+    <item name="voice_onboarding_start" type="id" />
+    <item name="command_input" type="id" />
+    <item name="command_status" type="id" />
+    <item name="use_functiongemma" type="id" />
+    <item name="agent_settings" type="id" />
+    <item name="agent_back" type="id" />
+    <item name="voice_button" type="id" />
+    <item name="voice_heading" type="id" />
+    <item name="voice_transcript" type="id" />
+    <item name="update_button" type="id" />
+    <item name="update_status" type="id" />
+    <item name="update_notes" type="id" />
+</resources>

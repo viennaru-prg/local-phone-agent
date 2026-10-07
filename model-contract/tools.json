@@ -1,0 +1,180 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "perform_app_task",
+      "description": "등록된 앱별 함수가 없으면 실제 설치 앱의 화면에서 원래 작업 목표를 계속 수행한다. 앱 이름과 원래 목표를 보존하며 패키지·좌표·새 목표를 만들지 않는다. 앱 이름이 빈 경우 현재 앱을 사용한다.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "app_name": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "goal": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "app_name",
+          "goal"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "navigate",
+      "description": "사용자가 말한 목적지 이름 또는 별칭으로 내비게이션을 요청한다. 주소와 좌표를 생성하지 않는다.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "destination": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "destination"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "media_resume",
+      "description": "음악 재생 재개를 요청한다.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "open_app",
+      "description": "사용자가 말한 이름의 설치된 앱을 연다. 패키지, URL, Activity를 생성하지 않는다.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "app_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "app_name"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "set_alarm",
+      "description": "24시간제로 지정한 다음 해당 시각에 한 번 울리는 알람을 공식 시계 앱에 요청한다. 날짜·반복은 지원하지 않는다.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "hour": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 23
+          },
+          "minute": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 59
+          }
+        },
+        "required": [
+          "hour",
+          "minute"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "set_timer",
+      "description": "지정한 길이의 타이머를 공식 시계 앱에 요청한다.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 86400
+          }
+        },
+        "required": [
+          "seconds"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "open_settings",
+      "description": "Android 설정 화면을 연다. 설정 값을 직접 변경하지 않는다.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "string",
+            "enum": [
+              "general",
+              "wifi",
+              "bluetooth",
+              "sound",
+              "display"
+            ]
+          }
+        },
+        "required": [
+          "page"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "media_pause",
+      "description": "선택한 음악 세션을 배경에서 일시정지한다.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "media_next",
+      "description": "선택한 음악 세션의 다음 곡으로 한 번 이동한다.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  }
+]

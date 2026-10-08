@@ -1,6 +1,7 @@
 package dev.localphone.agent.runtime
 
 import android.net.Uri
+import android.os.SystemClock
 import dev.localphone.agent.AgentApplication
 import dev.localphone.agent.data.*
 import dev.localphone.core.*
@@ -36,6 +37,10 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
             var searchedPersonal = false
             var idle = 0
             var startClicked = false
+            var previewObserved = false
+            var startWaitAt: Long? = null
+            var resolvedWaitAt: Long? = null
+            val routeAttempts = mutableSetOf<String>()
             var resolved = known != null
             var destinationObserved = false
             val seen = mutableSetOf<Int>()
@@ -43,6 +48,7 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
             // App-specific labels are accelerators too. Continue on the observed UI with the local
             // planner when those labels do not match; it cannot guess a private destination identity.
             suspend fun assist(screen: UiScreen, identityResolved: Boolean): Boolean {
+                progress("AI가 지도 화면에서 다음 동작 확인 중…")
                 val proposal = if (graph.useAgentModel) graph.planner.nextUi(uiGoal, screen, history.takeLast(6)) else UiProposal.Unavailable
                 val command = (proposal as? UiProposal.Act)?.command ?: return false
                 val node = when (command) {
@@ -64,10 +70,12 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
                 if (!act(screen, command)) return false
                 history += command.toString()
                 if (identityResolved && command is UiCommand.Click && node != null &&
-                    Regex("안내.*시작|주행.*시작|내비게이션.*시작|start.*(?:navigation|guidance)", RegexOption.IGNORE_CASE).containsMatchIn(node.label)) startClicked = true
+                    SemanticUi.navigationStartTargets(screen).any { it.token == screen.clickTarget(node).token }) {
+                    startClicked = true; startWaitAt = SystemClock.elapsedRealtime()
+                }
                 return true
             }
-            repeat(35) {
+            repeat(150) {
                 val screen = screen()
                 val content = screen.text()
                 val normalized = PlaceText.normalize(content)
@@ -75,28 +83,58 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
                     delay(450); return@repeat
                 }
                 if (resolved) {
+                    if (resolvedWaitAt == null) resolvedWaitAt = SystemClock.elapsedRealtime()
                     val identity = listOfNotNull(selectedName, selectedAddress.takeIf(String::isNotBlank), known?.name)
-                    if (identity.any { PlaceText.normalize(it).let { value -> value.isNotBlank() && normalized.contains(value) } }) destinationObserved = true
+                    val identityOnScreen = identity.any { PlaceText.normalize(it).let { value -> value.isNotBlank() && normalized.contains(value) } }
+                    if (identityOnScreen) destinationObserved = true
                     // A route preview or accepted click is not success. Observe guidance controls and driving status together.
-                    if (destinationObserved && startClicked && SemanticUi.navigationStarted(screen)) {
+                    if (destinationObserved && SemanticUi.navigationStarted(screen) &&
+                        (startClicked || previewObserved && identityOnScreen)) {
                         val reference = ProviderPlaceReference(phrase, selectedName ?: phrase, selectedAddress,
                             NaverLinks.PACKAGE, System.currentTimeMillis())
                         return@run UiGoalResult("${selectedName ?: phrase} 안내 시작을 지도 화면에서 확인했습니다.",
-                            "NAVIGATION_ACTIVE_AFTER_START", selectedCoordinates, reference)
+                            if (startClicked) "NAVIGATION_ACTIVE_AFTER_START" else "NAVIGATION_ACTIVE_AFTER_OBSERVED_COUNTDOWN", selectedCoordinates, reference)
                     }
                     progress("목적지 경로와 안내 시작 확인 중…")
-                    val start = screen.exact("안내 시작", "주행 시작", "경로 안내 시작", "내비게이션 시작", "Start navigation", "Start guidance")
-                        .map(screen::clickTarget).distinctBy { it.token }
+                    val start = SemanticUi.navigationStartTargets(screen)
                     if (destinationObserved && start.isNotEmpty() && !startClicked) {
-                        val node = select(screen, start, "어느 안내 방식으로 시작할까요?") ?: return@repeat
-                        startClicked = act(screen, UiCommand.Click(node.token)); idle = 0; return@repeat
+                        previewObserved = true
+                        if (startWaitAt == null) startWaitAt = SystemClock.elapsedRealtime()
+                        // Re-read the live screen while the provider enables its countdown button.
+                        // A slow model call here would propose a node from an obsolete countdown.
+                        val enabled = start.filter { it.enabled }
+                        progress(if (enabled.isEmpty()) "지도 안내 시작 버튼이 활성화되기를 기다리는 중…" else "지도 안내 시작 누르는 중…")
+                        val node = select(screen, enabled, "어느 안내 방식으로 시작할까요?")
+                        if (node != null) startClicked = act(screen, UiCommand.Click(node.token))
+                        if (startClicked) startWaitAt = SystemClock.elapsedRealtime()
+                        else if (SystemClock.elapsedRealtime() - startWaitAt!! > 20_000)
+                            throw UiUnavailable(InvocationState.EXECUTION_FAILED, "지도 안내 시작 버튼을 사용할 수 없거나 화면이 계속 바뀌어 안내를 시작하지 못했습니다.")
+                        idle = 0; delay(200); return@repeat
                     }
-                    if (startClicked) { delay(350); if (++idle < 9) return@repeat }
+                    if (startClicked) {
+                        progress("안내 시작 후 실제 주행 화면 확인 중…")
+                        if (SystemClock.elapsedRealtime() - (startWaitAt ?: SystemClock.elapsedRealtime()) >= 12_000)
+                            throw UiUnavailable(InvocationState.EXECUTION_FAILED, "안내 시작을 눌렀지만 실제 주행 안내 상태를 확인하지 못했습니다.")
+                        delay(300); return@repeat
+                    }
+                    // A previously observed countdown can disappear just before guidance starts.
+                    if (previewObserved && SystemClock.elapsedRealtime() - (startWaitAt ?: 0) < 20_000) {
+                        delay(250); return@repeat
+                    }
                     val route = screen.exact("도착", "목적지로", "길찾기", "경로 찾기", "자동차", "Destination", "Directions", "Driving")
                         .map(screen::clickTarget).distinctBy { it.token }
-                    val node = route.firstOrNull()
+                    val node = route.firstOrNull { it.enabled && (it.label.ifBlank { screen.descendants(it.token).joinToString { child -> child.label } }) !in routeAttempts }
+                    if (node != null) routeAttempts += node.label.ifBlank { screen.descendants(node.token).joinToString { child -> child.label } }
                     if (node != null && act(screen, UiCommand.Click(node.token))) { idle = 0; return@repeat }
+                    val pendingPreview = screen.exact("자동차 경로", "경로 정보", "추천 경로", "경로 옵션").isNotEmpty() ||
+                        route.isNotEmpty() && routeAttempts.isNotEmpty()
+                    if (destinationObserved && pendingPreview && SystemClock.elapsedRealtime() - resolvedWaitAt!! < 12_000) {
+                        progress("지도 경로가 준비되기를 기다리는 중…"); delay(250); return@repeat
+                    }
                     if (assist(screen, true)) { idle = 0; return@repeat }
+                    // A route preview can render a few seconds before its button. Keep observing
+                    // without repeatedly selecting Driving or declaring an idle screen failed.
+                    if (SystemClock.elapsedRealtime() - resolvedWaitAt!! < 12_000) { delay(250); return@repeat }
                     if (++idle >= 5) throw UiUnavailable(InvocationState.EXECUTION_FAILED, "목적지는 찾았지만 지도 화면에서 안내 시작을 확인하지 못했습니다.")
                     delay(250); return@repeat
                 }
@@ -320,6 +358,7 @@ class GenericUiGoal(private val graph: AgentApplication) {
                 val search = screen.exact("검색", "Search").map(screen::clickTarget).firstOrNull()
                 if (search != null && act(screen, UiCommand.Click(search.token))) return@repeat
             }
+            progress("AI가 앱 화면에서 다음 동작 확인 중…")
             when (val proposal = if (graph.useAgentModel) graph.planner.nextUi(goal, screen, history.takeLast(6)) else UiProposal.Unavailable) {
                 is UiProposal.Act -> if (act(screen, proposal.command)) { history += proposal.command.toString(); idle = 0; return@repeat }
                 is UiProposal.Ambiguous -> {

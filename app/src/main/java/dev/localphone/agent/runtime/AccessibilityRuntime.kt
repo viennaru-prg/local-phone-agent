@@ -62,7 +62,10 @@ class AccessibilityRuntime(private val context: Context, private val settings: S
         activeSession = id
         try {
             port.begin(id, packageName) { job.cancel(CancellationException("사용자가 화면 작업을 취소했습니다.")) }
-            withTimeout(45000) { UiSession(id, goal, port, context).body() }
+            // This includes local-model prefill and several observed UI steps. A 45-second
+            // whole-task deadline could cancel a healthy Qwen midway through the next screen.
+            // Individual native inference has its own bound; action/repetition limits remain.
+            withTimeout(180000) { UiSession(id, goal, port, context).body() }
         } finally { try { port.end(id) } finally { activeSession = null } }
     }
 }
@@ -85,13 +88,31 @@ class UiSession(private val id: String, val goal: String, private val port: UiAc
     }
     suspend fun act(screen: UiScreen, command: UiCommand): Boolean {
         currentCoroutineContext().ensureActive(); authorized()
+        val token = when (command) {
+            is UiCommand.Click -> command.token
+            is UiCommand.SetText -> command.token
+            is UiCommand.Submit -> command.token
+            is UiCommand.Scroll -> command.token
+            UiCommand.Back -> null
+        }
+        val requested = token?.let(screen::node)
+        // Waiting for an observed disabled control is not an action or a policy violation.
+        if (requested != null && (!requested.enabled || command is UiCommand.Click && !screen.clickTarget(requested).enabled)) return false
         if (++steps > 28) throw UiUnavailable(InvocationState.EXECUTION_FAILED, "화면 작업 횟수를 초과했습니다. 완료 여부를 확인할 수 없습니다.")
         if (!UiGrounding.allowed(goal, screen, command)) throw UiUnavailable(InvocationState.POLICY_BLOCKED, "요청 범위를 벗어나거나 보호된 화면이어서 조작하지 않았습니다.")
         val key = "$command:${screen.text().hashCode()}"
         val count = attempts.getOrDefault(key, 0) + 1; attempts[key] = count
         if (count > 2) return false
         val performed = port.perform(id, screen, command)
-        if (performed) delay(320)
+        if (performed) {
+            // Continue as soon as the target's observed contents change; a fixed sleep after
+            // every button adds needless latency. Unchanged/animating controls still settle.
+            repeat(6) {
+                delay(50); currentCoroutineContext().ensureActive(); authorized()
+                val refreshed = port.screen(id)
+                if (refreshed != null && refreshed.text() != screen.text()) return true
+            }
+        }
         return performed
     }
     suspend fun select(screen: UiScreen, nodes: List<UiNode>, prompt: String, forceChoice: Boolean = false): UiNode? {

@@ -44,7 +44,7 @@ SpeechVocabulary는 암호화 UserPlaces, 지원하는 장소 역할, 같은 공
 
 context 준비 → AudioFocus → 150ms 안정화 → native 시작 → onReadyForSpeech → LISTENING → haptic 순서입니다. 캡처 종료 전에 focus를 반환하며 transport resume은 보내지 않습니다. 기본 duck과 선택적 TRANSIENT pause 전략이 있고 실제 음악/차량 우열은 미측정입니다. partial·취소 후 callback·마이크 준비 전 결과는 작업을 실행하지 않습니다.
 
-음성 진단은 마지막 한 건을 메모리에 둡니다. DEBUG 또는 명시적 opt-in 실행 진단만 암호화 저장합니다. 비공개 평가 Activity는 별도 동의·버튼으로만 녹음하고 내부 noBackupFilesDir에 결과를 저장하며 raw PCM 저장은 기본 해제입니다. 이전 모델과 native bias 0/12/24 및 같은 native 결과의 contextual rescore를 비교하도록 구성했습니다. AUDIO_SOURCE extra의 실제 기기 지원은 검증 대상이며 지원 API만으로 동일 음성 replay 성공을 주장하지 않습니다. 이번 배포의 자연 발화 평가는 사용자 요청으로 생략했습니다.
+음성 진단은 마지막 한 건을 메모리에 둡니다. 버전·설치 공간·진입점·선택 모델·실행 단계·시간 메타데이터는 마지막 한 건을 암호화 저장합니다. 음성 원문·화면/모델 출력·작업 내용의 상세 저장은 DEBUG 또는 명시적 opt-in만 허용합니다. 비공개 평가 Activity는 별도 동의·버튼으로만 녹음하고 내부 noBackupFilesDir에 결과를 저장하며 raw PCM 저장은 기본 해제입니다. 이전 모델과 native bias 0/12/24 및 같은 native 결과의 contextual rescore를 비교하도록 구성했습니다. AUDIO_SOURCE extra의 실제 기기 지원은 검증 대상이며 지원 API만으로 동일 음성 replay 성공을 주장하지 않습니다. 이번 배포의 자연 발화 평가는 사용자 요청으로 생략했습니다.
 
 ## 설치 공간, 권한과 배포
 
@@ -52,13 +52,23 @@ context 준비 → AudioFocus → 150ms 안정화 → native 시작 → onReadyF
 
 `automation`은 debuggable/testOnly가 아니지만 개인 시험판이며 기존 개발 인증서로 서명합니다. 접근성 및 알림 listener를 명시적으로 포함합니다. `install`은 과거 권한 축소판으로 두 기능이 없습니다. 사용자에게 이번 요청의 설치판으로 권하지 않습니다. 실제 Play Protect 설치 승인과 Google Play 접근성 정책 적합성은 확인하지 않았습니다. 기능을 숨기거나 보호를 끄지 않습니다.
 
-화면 원문은 일시 메모리로 처리하고 전송/저장하지 않습니다. 검증된 목적지 캐시는 선택 사항입니다. 마지막 실행 한 건의 암호화 저장은 DEBUG 또는 명시적 opt-in만 허용하며 automation의 기본값은 메모리 진단입니다. 대상 앱의 통신, 선택적 공개 장소 REST API와 사용자 Deep Link는 외부 AI 호출과 구별합니다.
+화면 원문은 일시 메모리로 처리하고 전송/저장하지 않습니다. 검증된 목적지 캐시는 선택 사항입니다. 마지막 실행의 상세 암호화 저장은 DEBUG 또는 명시적 opt-in만 허용합니다. 일반 실행에서도 설치 버전·선택 모델·시간 등 내용 없는 메타데이터는 재시작 뒤 연결 진단에 사용합니다. 대상 앱의 통신, 선택적 공개 장소 REST API와 사용자 Deep Link는 외부 AI 호출과 구별합니다.
 
 ## 검증
 
 core는 목표 보존·빠른 경로 실패·좌표·음성 계획·관측 token/fingerprint 검사를 수행합니다. Android instrumentation은 실제 OS AccessibilityService가 별도의 testOnly 앱의 Views를 누르고 검색·선택·주행 상태를 관측하게 합니다. fixture의 NAVER 패키지는 URI 계약 시험용이며 실제 네이버 앱으로 설명하지 않습니다. shell 접근성 허용은 확인된 전용 AVD의 테스트 코드에만 존재합니다.
 
-최종 APK 해시가 설치판 검사 기록과 일치하는지 패키징에서 확인합니다. 기존 개발판 전체 검사와 nondebug automation 검사 수는 중복 합산하지 않습니다. S25 일반 영역의 과거 USB 설치·사용자 접근성 활성화 및 실제 네이버 집/회사·자주 가는 곳 구조는 확인했습니다. 0.7.0의 S25 모델 실행·실제 네이버 안내 시작·Knox·RegiStar·음악 앱의 실제 소리는 별도 미검증입니다. 모델 원출력·A/B 의미 일치율·성능 및 회귀 결과는 dual-model-results.md와 Release의 update-verification.json에 기록합니다.
+최종 APK 해시가 설치판 검사 기록과 일치하는지 패키징에서 확인합니다. 기존 개발판 전체 검사와 nondebug automation 검사 수는 중복 합산하지 않습니다. S25 일반 영역의 과거 USB 설치·사용자 접근성 활성화 및 실제 네이버 집/회사·자주 가는 곳 구조는 확인했습니다. 0.7.1의 S25 모델 실행·실제 네이버 안내 시작·Knox·RegiStar·음악 앱의 실제 소리는 별도 미검증입니다. 모델 원출력·A/B 의미 일치율·성능 및 회귀 결과는 dual-model-results.md, voice-qwen-review.md와 Release의 update-verification.json에 기록합니다.
+
+## 0.7.1 실행 수명과 지연
+
+자동 호출은 최종 인식을 받은 TRANSCRIBING/PLANNING/POLICY_CHECK/EXECUTING 단계에서 화면이 일시적으로 덮여도 명령을 유지합니다. 잠금·명시적 취소·실제 Activity 파괴 때 정리하며 같은 최종 인식은 한 번만 소비합니다. onStop 이후 이어간 상태를 실행 기록에 남깁니다. 명령 해석의 규칙 fallback과 실제 UI 모델 추론을 별도 표시합니다. 다른 세션의 이전 모델 응답을 새 호출의 응답으로 표시하지 않습니다.
+
+Qwen은 동일 canonical catalog에서 만든 compact function signature, scoped node 별 grammar와 공통 decoder를 사용합니다. UI 시스템 프롬프트는 관측이 바뀌어도 유지하고, grammar는 현재 클릭 가능/활성 노드로 제한합니다. JNI는 complete JSON root에서 생성을 끝내고 전화 추론 45초·UI 추론 30초를 각각 제한합니다. native 시작 전에 취소 상태를 초기화하고 취소 후 worker 종료를 기다린 다음 해제합니다.
+
+QwenInputCache는 고정 Tool catalog와 고정 건강검사 입력의 prefill을 **답변 생성 전에** 앱 비공개 noBackupFilesDir에 저장합니다. 실제 검사 성공 후에만 commit합니다. 모델 SHA·빌드·ABI·입력·런타임 revision·파일 크기(128 MiB 상한)·SHA-256과 native token 일치를 검사해 복원하며, 불일치는 새 준비로 복구합니다. 사용자 명령·화면·응답 계산 상태는 디스크에 저장하지 않습니다. 자동 재로딩에서 검증된 고정 입력을 재사용해도 사용자 명령은 native에서 새로 생성합니다. 명시적 모델 전환은 새 실제 probe를 실시합니다. UI 계획 후 전화 명령을 받을 때도 공통 입력을 복원할 수 있습니다.
+
+UI 전체 작업은 최대 180초·28개 조작 제한을 유지하며 disabled 버튼 기다림은 조작 횟수로 소비하지 않습니다. 실제 접근성 enabled 상태를 관측/fingerprint/live 확인에 포함합니다. NAVER의 카운트다운 문구와 지연 버튼은 새 관측에서 선택하며, 버튼 누름 또는 관측한 provider 자동 시작 뒤 실제 안내 상태를 확인합니다. 다른 목적지 자동 안내는 성공/캐시로 인정하지 않습니다. 조작 뒤 50ms 간격으로 화면 변화를 확인해 바뀌면 다음 단계로 이어갑니다. 인식 완료(T5)→완료(T8)의 10초 목표와 실제 측정 범위는 별도로 보고합니다.
 
 ## 앱 업데이트
 

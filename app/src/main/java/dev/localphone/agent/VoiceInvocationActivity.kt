@@ -104,7 +104,10 @@ class VoiceInvocationActivity : ComponentActivity() {
             graph.createCaptureFocus(), HapticVoiceFeedback(this, graph.settings), arrivedAt,
             object : VoiceSessionCoordinator.Observer {
                 override fun onState(state: InvocationState, message: String) {
-                    label.text = message
+                    // Show the selected AI at this entry too, including capture and early failures.
+                    // Model selection is the same installation-scoped setting as the center button.
+                    val model = if (graph.useAgentModel) graph.embeddedModels.info(graph.planner.selected).name else "규칙 모드"
+                    label.text = "$model · $message"
                     indicator.setPhase(when (state) {
                         InvocationState.STARTING -> VoicePhase.PREPARING
                         InvocationState.LISTENING -> VoicePhase.LISTENING
@@ -123,7 +126,11 @@ class VoiceInvocationActivity : ComponentActivity() {
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); coordinator?.duplicate() }
     override fun onStop() {
-        if (!onboarding && !isChangingConfigurations && !engine.externalExecution) {
+        // RegiStar/launcher UI can briefly cover this entry while a final transcript is being
+        // planned. Do not cancel an accepted command just because that activity is stopped.
+        val accepted = coordinator?.state in listOf(InvocationState.TRANSCRIBING, InvocationState.PLANNING, InvocationState.POLICY_CHECK, InvocationState.EXECUTING)
+        coordinator?.hostStopped(engine.externalExecution || accepted && engine.profile.canAct())
+        if (!onboarding && !isChangingConfigurations && !engine.externalExecution && (!accepted || !engine.profile.canAct())) {
             coordinator?.cancel(); if (started && !isFinishing) closeEntry()
         }
         super.onStop()

@@ -69,4 +69,25 @@ class GoalFallbackTest {
         val text = UiNode("label", "검색", parent = "root")
         assertEquals(text, UiScreen("map", 1, listOf(UiNode("root", ""), text)).clickTarget(text))
     }
+    @Test fun observedNavigationStartMatchesCountdownButNotExplanatoryOrEndLabels() {
+        for (label in listOf("안내 시작", "안내 시작 (3초)", "안내 시작 5", "5초 후 안내 시작", "Start navigation (3 seconds)")) {
+            val screen = UiScreen("map", 1, listOf(UiNode("start", label, clickable = true)))
+            assertEquals(listOf("start"), SemanticUi.navigationStartTargets(screen).map { it.token }, label)
+        }
+        for (label in listOf("안내 종료", "안내 시작 방법", "안내 시작을 취소", "시작 안내", "회사"))
+            assertTrue(SemanticUi.navigationStartTargets(UiScreen("map", 1, listOf(UiNode("x", label, clickable = true)))).isEmpty(), label)
+    }
+    @Test fun disabledStartRemainsObservableButCannotBeClickedUntilRefreshed() {
+        val screen = UiScreen("map", 1, listOf(UiNode("row", "", clickable = true, enabled = false), UiNode("label", "안내 시작 (2초)", parent = "row")))
+        val start = SemanticUi.navigationStartTargets(screen).single()
+        assertEquals("row", start.token); assertFalse(start.enabled)
+        assertFalse(UiGrounding.allowed("회사로 안내 시작", screen, UiCommand.Click(start.token)))
+        val ready = screen.copy(nodes = screen.nodes.map { it.copy(enabled = true) })
+        assertTrue(UiGrounding.allowed("회사로 안내 시작", ready, UiCommand.Click(start.token)))
+        assertNotEquals(UiFingerprint.describe(screen, start), UiFingerprint.describe(ready, ready.node("row")!!))
+    }
+    @Test fun ordinaryCompletionTextIsEvidenceAndCannotBecomeAGestureTarget() {
+        val screen = UiScreen("app", 1, listOf(UiNode("done", "테스트 메모 저장 완료")))
+        assertFalse(UiGrounding.allowed("테스트 메모를 저장해줘", screen, UiCommand.Click("done")))
+    }
 }

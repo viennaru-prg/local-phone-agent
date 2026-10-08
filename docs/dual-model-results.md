@@ -1,6 +1,6 @@
-# Local Phone Agent 0.7.0 — 듀얼 내장 모델 검증 결과
+# Local Phone Agent 0.7.1 — 듀얼 내장 모델 검증 결과
 
-최종 배포 APK `0.7.0-automation`, versionCode **9**. 검증 대상은 task 소유 Android 15/API35 x86_64 AVD `LocalPhoneAgent_API35`이며, 두 모델은 실제 네이티브 엔진에서 실행했다. 모델 검사 중 Wi-Fi와 모바일 데이터를 껐다. S25 Ultra 설치·성능·Knox는 **NOT_VERIFIED**다.
+최종 배포 APK `0.7.1-automation`, versionCode **10**. 검증 대상은 task 소유 Android 15/API35 x86_64 AVD `LocalPhoneAgent_API35`이며, 두 모델은 실제 네이티브 엔진에서 실행했다. 모델 검사 중 Wi-Fi와 모바일 데이터를 껐다. S25 Ultra 설치·성능·Knox는 **NOT_VERIFIED**다.
 
 ## 1. 정확한 모델 출처와 버전
 
@@ -39,23 +39,23 @@ FunctionGemma: **LiteRT-LM Android 0.10.2, CPU/XNNPACK, 4 threads, 1024 context 
 
 ## 4. APK 전체 크기
 
-**1,808,165,801 bytes (1.808 GB / 1.684 GiB)**.
+**1,808,198,573 bytes (1.808 GB / 1.684 GiB)**.
 
-SHA-256: `ca0dc8cc42f823dc447bc10284801974317268d68a3c535e370c64423206f8a3`. 사용자 설치 파일은 `LocalPhoneAgent-dual-model.apk` 하나다. 테스트 instrumentation APK는 배포하지 않는다. 동일한 기존 서명·일반 설치 가능 non-debug/non-testOnly automation 패키지를 사용한다.
+SHA-256: `a64d817958a95a630098d7c01d6148749a051c7c0bf48a1f8f4d3c5e9fcaf6b4`. 사용자 설치 파일은 `LocalPhoneAgent-dual-model.apk` 하나다. 테스트 instrumentation APK는 배포하지 않는다. 동일한 기존 서명·일반 설치 가능 non-debug/non-testOnly automation 패키지를 사용한다.
 
-기존 0.6 이하 updater의 512 MiB 제한 때문에 같은 Release에 작은 **준비판 versionCode 8**과 `update.json`을 별도로 둔다. 이전 앱은 준비판 설치 후 다시 업데이트 버튼을 눌러 최종판 9와 `update-dual.json`을 받는다. 준비판에는 Agent LLM이 없으며 직접 설치용 최종 앱으로 안내하지 않는다. 두 단계 모두 Android 설치 승인이 필요하다.
+기존 0.6 이하 updater의 512 MiB 제한 때문에 같은 Release에 작은 **준비판 versionCode 8**과 `update.json`을 별도로 둔다. 이전 앱은 준비판 설치 후 다시 업데이트 버튼을 눌러 최종판 10과 `update-dual.json`을 받는다. 준비판에는 Agent LLM이 없으며 직접 설치용 최종 앱으로 안내하지 않는다. 두 단계 모두 Android 설치 승인이 필요하다.
 
 ## 5. 설치 후 실제 저장공간
 
-두 모델을 한 번씩 사용한 뒤 앱 native 세션을 닫고 AVD에서 측정했다. Android StorageStats(캐시를 포함하는 dataBytes 정의이므로 항목을 무조건 합하지 않음): `{"app_bytes": 1818062848.0, "data_bytes": 1844785152.0, "cache_bytes": 364544.0}`.
+두 모델을 한 번씩 사용한 뒤 앱 native 세션을 닫고 AVD에서 측정했다. Android StorageStats(캐시를 포함하는 dataBytes 정의이므로 항목을 무조건 합하지 않음): `{"app_bytes": 1818157056.0, "data_bytes": 1887965184.0, "cache_bytes": 393216.0}`.
 
-- `base_apk_bytes`: 1,808,165,801 bytes
-- `private_no_backup_bytes`: 1,844,091,984 bytes
+- `base_apk_bytes`: 1,808,198,573 bytes
+- `private_no_backup_bytes`: 1,887,221,572 bytes
 - `private_model_weights_bytes`: 1,571,404,192 bytes
-- `private_cache_bytes`: 317,120 bytes
+- `private_cache_bytes`: 350,592 bytes
 - `native_libraries_bytes`: 0 bytes
 
-APK와 추출 사본은 서로 다른 실제 파일이다. 처음 선택한 모델만 전용 비백업 디렉터리로 추출하고 두 모델을 모두 사용한 뒤에는 둘의 검증된 디스크 사본이 남는다. RAM에는 하나만 로드한다. 1 MiB streaming·SHA 검사·fsync·atomic rename·128 MiB 여유 공간 확인을 사용한다. 중단된 추출의 .part 삭제 및 손상된 사본을 APK에서 재추출하는 실제 테스트가 PASS했다. 새 revision에서는 이전 사본과 이전 XNNPACK cache를 정리한다. 업데이트 다운로드 전에는 파일 및 Android 설치 staging을 위해 약 2×APK+128 MiB의 추가 여유 공간을 확인한다. 기존 개인 설정을 지우지 않는다.
+APK와 추출 사본은 서로 다른 실제 파일이다. 처음 선택한 모델만 전용 비백업 디렉터리로 추출하고 두 모델을 모두 사용한 뒤에는 둘의 검증된 디스크 사본이 남는다. RAM에는 하나만 로드한다. Qwen은 실제 건강검사로 검증한 고정 Tool 입력 상태만 별도 private noBackup에 저장한다. 모델/빌드/ABI/입력/SHA를 확인하고 사용자 명령·화면·답변은 저장하지 않는다. 1 MiB streaming·SHA 검사·fsync·atomic rename·128 MiB 여유 공간 확인을 사용한다. 중단된 추출의 .part 삭제 및 손상된 사본을 APK에서 재추출하는 실제 테스트가 PASS했다. 새 revision에서는 이전 사본과 이전 XNNPACK cache를 정리한다. 업데이트 다운로드 전에는 파일 및 Android 설치 staging을 위해 약 2×APK+128 MiB의 추가 여유 공간을 확인한다. 기존 개인 설정을 지우지 않는다.
 
 ## 6. FunctionGemma 실제 추론
 
@@ -63,7 +63,7 @@ APK와 추출 사본은 서로 다른 실제 파일이다. 처음 선택한 모�
 
 ## 7. Qwen 실제 추론
 
-**PASS — 실제 Qwen 로드·오프라인 한국어 계획·Android 실행**. 한국어 Tool Plan 10/11. `네이버지도 켜줘`의 실제 모델 계획 → 공통 정책 → Android launcher → 관측 foreground package까지 확인했다. 지도 대상은 NAVER 패키지를 가진 별도 테스트 앱이므로 실 NAVER 주행 성공으로 계산하지 않는다.
+**PASS — 실제 Qwen 로드·오프라인 한국어 계획·Android 실행**. 한국어 Tool Plan 9/11. `네이버지도 켜줘`의 실제 모델 계획 → 공통 정책 → Android launcher → 관측 foreground package까지 확인했다. 지도 대상은 NAVER 패키지를 가진 별도 테스트 앱이므로 실 NAVER 주행 성공으로 계산하지 않는다.
 
 추가 실제 경로: 합성 한국어 PCM → 포함 sherpa-onnx Android decoder → 원문 `오전 7시 알람 맞춰 줘` → 선택된 Qwen 실제 생성 → `set_alarm(7,0)` → Policy → 실제 AVD Clock 앱. `MODEL_INFERENCE:qwen3` 및 실제 Android Intent/foreground 증거를 기록했고 PASS했다. 이 검사는 실제 마이크 자연 발화 및 S25 기본 native STT 검사가 아니다. STT 엔진은 모델 선택 때문에 바뀌지 않는다.
 
@@ -73,11 +73,11 @@ APK와 추출 사본은 서로 다른 실제 파일이다. 처음 선택한 모�
 
 | 선택 | 총 전환 ms | 추출 ms | native load ms | 실제 probe ms |
 |---|---:|---:|---:|---:|
-| FUNCTIONGEMMA | 432 | 4 | 123 | 286 |
-| QWEN3 | 23,797 | 8,024 | 3,841 | 11,572 |
-| FUNCTIONGEMMA | 2,542 | 1 | 456 | 1,981 |
+| FUNCTIONGEMMA | 459 | 1 | 161 | 264 |
+| QWEN3 | 39,809 | 9,066 | 5,859 | 24,579 |
+| FUNCTIONGEMMA | 2,806 | 1 | 627 | 2,045 |
 
-실제 native 추론 취소 후 join **108ms**, 다음 실제 명령 생성 PASS. 마지막 Qwen 선택은 encrypted setting/새 manager뿐 아니라 **별도 Android process 종료·재실행 후 UI의 선택된 RadioButton**으로 확인했다. 휴대폰 재부팅 및 Knox 재시작은 미검증이다.
+실제 native 추론 취소 후 join **203ms**, 다음 실제 명령 생성 PASS. 마지막 Qwen 선택은 encrypted setting/새 manager뿐 아니라 **별도 Android process 종료·재실행 후 UI의 선택된 RadioButton**으로 확인했다. 휴대폰 재부팅 및 Knox 재시작은 미검증이다.
 
 ## 9. 한국어 명령 정확도
 
@@ -90,54 +90,54 @@ APK와 추출 사본은 서로 다른 실제 파일이다. 처음 선택한 모�
 | 집으로 네비 찍어줘 | FAIL | PASS | navigate(destination=집) |
 | 음악 재생해 | FAIL | PASS | media_resume() |
 | 현재 노래 저장해 | FAIL | PASS | perform_app_task(app_name=, goal=현재 노래 저장해) |
-| 집으로 가면서 음악 틀어줘 | FAIL | PASS | navigate(destination=집); media_resume() |
+| 집으로 가면서 음악 틀어줘 | FAIL | FAIL | open_app(app_name=map) |
 | 유튜브에서 노래 검색해 | FAIL | PASS | perform_app_task(app_name=유튜브, goal=유튜브에서 노래 검색해) |
 | 최근 알림 읽어줘 | FAIL | PASS | perform_app_task(app_name=, goal=최근 알림 읽어줘) |
 | 집으로 가자 | FAIL | PASS | navigate(destination=집) |
 | 집에 가자 | FAIL | PASS | navigate(destination=집) |
 | 지브로 가자 | FAIL | FAIL | navigate(destination=지브로) |
 
-`지브로 가자`는 Qwen이 목적지 `지브로`를 그대로 생성해 집으로 복구하지 못했다. 특정 문자열 치환을 추가하지 않았다. 같은 환경의 전체 계획 기준 Qwen 90.9% / FunctionGemma 0.0%다. **실제 사용자 앱 작업 성공률의 향상은 이 수치로 계산할 수 없다.** 앱 로그인·현재 UI·설정·권한·실행 완료 관측을 포함한 현장 성공률은 미측정이다.
+`지브로 가자`의 전체 계획은 FAIL이다. 실제 Qwen calls는 `[{'arguments': {'destination': '지브로'}, 'name': 'navigate'}]`이며 이 고정 1건을 자연 발화 전체 정확도로 일반화하지 않는다. 특정 문자열 치환을 추가하지 않았다. 같은 환경의 전체 계획 기준 Qwen 81.8% / FunctionGemma 0.0%다. **실제 사용자 앱 작업 성공률의 향상은 이 수치로 계산할 수 없다.** 앱 로그인·현재 UI·설정·권한·실행 완료 관측을 포함한 현장 성공률은 미측정이다.
 
 ## 10. Tool Plan 정확도
 
 | 지표 | FunctionGemma | Qwen |
 |---|---:|---:|
-| Intent 정확도(전체 요청 동작 종류) | 0/11 | 11/11 |
-| Entity 정확도(앱·장소 명시 8건) | 0/8 | 7/8 |
-| 전체 Tool Plan 의미 정확도 | 0/11 | 10/11 |
-| 잘못된 종류 또는 잘못된 인자의 호출을 낸 명령 | 1/11 | 0/11 |
+| Intent 정확도(전체 요청 동작 종류) | 0/11 | 10/11 |
+| Entity 정확도(앱·장소 명시 8건) | 0/8 | 6/8 |
+| 전체 Tool Plan 의미 정확도 | 0/11 | 9/11 |
+| 잘못된 종류 또는 잘못된 인자의 호출을 낸 명령 | 1/11 | 1/11 |
 | 스키마 위반 호출을 낸 명령 | 1/11 | 0/11 |
-| 복합 이동+음악 전체 계획 | FAIL | PASS |
+| 복합 이동+음악 전체 계획 | FAIL | FAIL |
 
 Intent는 요청한 모든 함수 종류, Entity는 앱/장소가 명시된 8건의 해당 인자, 전체 Plan은 모든 요청과 원문 목표 보존까지 평가한다. 잘못된 호출의 분모는 11개 명령이며 무호출은 오호출로 계산하지 않는다. 무호출·거절·누락은 전체 Plan 실패로 계산한다. PlanGrounding은 앱 열기를 내비게이션으로 바꾸거나 장소/시간을 만들어내는 계획을 거부한다. 명확한 복합 명령의 일부가 빠진 계획도 거부하며 규칙 fallback을 AI 정답으로 세지 않는다.
 
-개발 중 Qwen이 음악을 빠뜨린 실제 출력이 있었고 공통 coverage 검사와 동일한 다중 행동 지침을 추가했다. 최종 11건은 수정 후 **최종 APK의 실제 새 추론 결과**다. GBNF는 형식만 제한하며 의미 정확도를 강제하지 않는다.
+이번 `집으로 가면서 음악 틀어줘`에서 Qwen은 `open_app(app_name=map)`만 생성했다. 이 제안은 grounding에서 거부됐고 규칙 fallback의 유효 계획은 Navigate와 MediaResume 두 행동을 보존했다. 이 fallback을 AI의 전체 의미 성공으로 세지 않았다. 이전 0.7.0 동일 11건의 Qwen 계획은 10/11, 이번 최종 파일은 9/11이며 복합 계획도 실패했다. 속도 개선이 의미 정확도 개선을 보장하지 않는다. 최종 11건은 **최종 APK의 실제 새 추론 결과**다. GBNF는 형식만 제한하며 의미 정확도를 강제하지 않는다.
 
 ## 11. 기존 GUI Agent 회귀
 
-**core 118개 + 최종 APK Android 회귀 69개 + 실제 모델/복구/음성 연결 9개 PASS**, 실패·skip 0. GUI 25, 저장 2, Android Tool 7, updater 7, 음성 UI 8, 음성 구조 3, voice invocation 17 = 69. 기존 빠른 경로·NAVER 집/회사/자주 가는 곳 탐색·원래 목표 UI fallback·관측된 요소 기반 조작·취소·호출 중복 제어를 보존했다.
+**core 121개 + 최종 APK Android 회귀 73개 + 실제 모델/복구/음성 연결 9개 + 새 모델 UI/음성/기한/입력 캐시 7개 PASS**, 최종 집계 실패·skip 0. Android 총 89개를 동일한 최종 app APK로 실행했다. 모델/추가 검사의 test APK와 회귀 재검사의 test APK는 듣는 중 표시의 기대값 한 줄만 다른 두 빌드이며 각각의 해시를 기록했다. app APK는 바뀌지 않았고 모델/추가 검사 소스도 바뀌지 않았다. 기존 빠른 경로·NAVER 집/회사/자주 가는 곳 탐색·원래 목표 UI fallback·관측된 요소 기반 조작·취소·호출 중복 제어를 보존했다.
 
-회귀 집계는 동일한 app/test APK의 각 case 최신 결과다. 첫 실행은 68/69였으며 설치 화면 검사에서 외부 작은 업데이트 fixture의 label이 실제 앱 이름과 달랐다. fixture label만 맞춘 뒤 updater 7개를 다시 실행해 모두 PASS했다. APK는 변경하지 않았으며 첫 실패 기록과 재검사 기록을 각각 `dual-regression-initial.json`, `dual-update-retry.json`에 보존했다.
+73개 회귀는 기존 경로를 분리 검증하기 위해 명시적으로 **RULE_BASED** 모드에서 실행했다. 실제 모델은 별도 9개와 추가 7개에서 진짜 native engine을 사용했다. 새 UI 검사는 자동 호출 창이 PLANNING 도중 실제 OS에 의해 중지된 뒤 Qwen/내비 완료, 비활성 카운트다운 후 안내, 장소 캐시 재호출, Qwen 두 화면 조작 후 새로운 완료 표시를 확인한다. 내비는 실제 NAVER 대신 전용 테스트 앱이다. Clock 검사는 실제 Android Intent/foreground다. 전체 11개 계획을 실 NAVER/음악/YouTube/알림 앱에서 모두 실행했다고 주장하지 않는다.
 
-회귀 69개는 기존 경로를 분리 검증하기 위해 명시적으로 **RULE_BASED** 모드에서 실행했다. 실제 모델은 별도 9개에서 진짜 native engine을 사용했다. 전체 11개 계획을 실 NAVER/음악/YouTube/알림 앱에서 모두 실행했다고 주장하지 않는다. 둘 다 공통 GUI catalog를 받지만 실제 모델이 임의 앱의 다단계 UI를 해결하는 품질은 미검증이다. Tool 선택 오류, 모델 오류, 화면 관찰 오류, 실행 오류를 분리 기록한다.
+개발 후보의 모델 전환 실패 복구 검사에서 검증용 새 응답이 없던 문제가 발견돼, 실패한 명시적 전환의 복구도 새 실제 probe로 확인하도록 수정한 뒤 최종 파일을 다시 검사했다. 자동 idle 복원은 검증된 입력 상태를 재사용하며 매 명령 새 추론을 한다. 후보의 실패 기록은 로컬 `voice-model-review/candidate-99f6f152`에 보존했다. 최종 앱의 최초 회귀는 새로 표시하는 AI 이름 접두어로 인해 문구 기대값 한 건이 실패(72/73)했다. 그 기대값만 갱신하고 73개를 다시 검사했다. 원본 실패 기록은 `fix-regression-initial.json`, test APK/소스 차이 증거는 `instrumentation-artifact-verification.json`에 보존했다. 실제 휴대폰의 RegiStar 경로와 임의 앱 전체 다단계 작업 성공률은 미검증이다. Tool 선택 오류, 모델 오류, 화면 관찰 오류, 실행 오류를 분리 기록한다.
 
 ## 12. RAM·CPU·속도·발열·배터리
 
-동일 AVD: CPU 4 threads, RAM 4096 MiB, x86_64/WHPX. 실제 FunctionGemma 최초 설치 추출 **627ms**, native load **843ms**. Qwen 최초 추출/native load는 위 첫 Qwen 전환 행이다. 최초 좁은 Wi-Fi probe와 전체 phone catalog의 첫 명령 prefill은 다른 측정이다.
+동일 AVD: CPU 4 threads, RAM 4096 MiB, x86_64/WHPX. 실제 FunctionGemma 최초 설치 추출 **509ms**, native load **442ms**. Qwen 최초 추출/native load는 위 첫 Qwen 전환 행이다. Qwen 건강검사는 같은 전체 phone catalog를 먼저 계산한다. 아래 첫 명령 시간에는 앞서 전환에서 수행한 건강검사가 포함되지 않는다. 초기 설치 추출/준비, 음성 인식 후 완료 시간은 별도 측정이며 [voice-qwen-review.md](voice-qwen-review.md)에 있다.
 
 | 측정 | FunctionGemma | Qwen |
 |---|---:|---:|
-| 첫 전체 catalog 명령 추론(ms) | 526.0 | 42,940.0 |
-| 이후 10건 추론 중앙값(ms) | 477.5 | 3,644.0 |
-| 이후 추론 최소(ms) | 449.0 | 3,171.0 |
-| 이후 추론 최대(ms) | 625.0 | 6,455.0 |
-| 명령 중 process CPU 시간 중앙값(ms) | 1,831.0 | 12,753.0 |
-| 300ms 간격 관측 peak process PSS(MiB) | 548.4 | 1,854.1 |
+| 첫 전체 catalog 명령 추론(ms) | 535.0 | 4,111.0 |
+| 이후 10건 추론 중앙값(ms) | 444.5 | 3,339.0 |
+| 이후 추론 최소(ms) | 426.0 | 2,837.0 |
+| 이후 추론 최대(ms) | 573.0 | 6,256.0 |
+| 명령 중 process CPU 시간 중앙값(ms) | 1,733.0 | 11,709.0 |
+| 300ms 간격 관측 peak process PSS(MiB) | 586.3 | 1,902.9 |
 
 PSS는 앱/VM/검사 프레임워크를 포함한 process 값이며 모델만의 RAM 값이 아니다. 300ms 샘플 간격의 관측 peak다. CPU ms도 process 전체 시간이며 utilization %로 보고하지 않는다. 추론 backend는 CPU이며 GPU/NPU utilization 측정은 하지 않았다. Qwen은 변하지 않은 prompt prefix의 KV만 재사용하고 이전 생성 응답을 재사용하지 않으므로 매 명령을 새로 생성한다. 변경된 사용자 문장/화면과 과거 출력 KV는 버린다.
 
-작업 후 **30초 idle**에 unload. 그 뒤 process PSS **115.9 MiB**, 2초 동안 process CPU **1ms**. 상시 추론·상시 마이크는 없다. 음성 호출은 STT와 선택 모델 warm 준비를 병행한다. AVD 결과로 뒷면 탭 S25 체감 지연·배터리·발열을 추정하지 않는다. **배터리/발열 NOT_APPLICABLE_AVD, 실제 단말 NOT_VERIFIED**.
+작업 후 **30초 idle**에 unload. 그 뒤 process PSS **103.9 MiB**, 2초 동안 process CPU **0ms**. 상시 추론·상시 마이크는 없다. 음성 호출은 STT와 선택 모델 warm 준비를 병행한다. AVD 결과로 뒷면 탭 S25 체감 지연·배터리·발열을 추정하지 않는다. **배터리/발열 NOT_APPLICABLE_AVD, 실제 단말 NOT_VERIFIED**.
 
 ## 13. 실제 S25 Ultra
 
@@ -147,15 +147,15 @@ PSS는 앱/VM/검사 프레임워크를 포함한 process 값이며 모델만의
 
 직접 설치용: `outputs/LocalPhoneAgent-dual-model.apk`.
 
-[GitHub v0.7.0 Release](https://github.com/viennaru-prg/local-phone-agent/releases/tag/v0.7.0)에서 `LocalPhoneAgent-dual-model.apk`를 사용한다. 앱의 업데이트 버튼은 공개 GitHub Release의 크기·SHA-256·패키지·버전·기존 서명을 검증한 뒤 Android 설치 화면을 연다. 모델 최초 다운로드는 필요하지 않다. 소스 Git에는 대형 가중치가 없으며 고정 manifest/준비 스크립트를 포함한다. Release의 모델 포함 source ZIP에는 두 실제 가중치·STT·고정 native 소스가 포함되고 개인 서명 키/토큰/SDK cache는 포함되지 않는다. SDK/Gradle dependencies는 별도로 필요하다.
+[GitHub v0.7.1 Release](https://github.com/viennaru-prg/local-phone-agent/releases/tag/v0.7.1)에서 `LocalPhoneAgent-dual-model.apk`를 사용한다. 앱의 업데이트 버튼은 공개 GitHub Release의 크기·SHA-256·패키지·버전·기존 서명을 검증한 뒤 Android 설치 화면을 연다. 모델 최초 다운로드는 필요하지 않다. 소스 Git에는 대형 가중치가 없으며 고정 manifest/준비 스크립트를 포함한다. Release의 모델 포함 source ZIP에는 두 실제 가중치·STT·고정 native 소스가 포함되고 개인 서명 키/토큰/SDK cache는 포함되지 않는다. SDK/Gradle dependencies는 별도로 필요하다.
 
-검증 데이터: Release의 `dual-model-validation.json`, `update-verification.json`, `SHA256SUMS.txt`; 로컬 `automation-test/dual-model.json`, `automation-test/dual-regression.json`, `model-selection-restart-verification.json`. GitHub CI는 core만 항상 검사하며 승인된 HF_TOKEN secret이 있어야 전체 APK/lint를 실행한다. 이번 배포 APK의 전체 빌드와 lint는 로컬에서 검증했다.
+검증 데이터: Release의 `dual-model-validation.json`, `update-verification.json`, `SHA256SUMS.txt`; 로컬 `automation-test/fix-dual-model.json`, `automation-test/fix-regression.json`, `model-selection-restart-verification.json`. GitHub CI는 core만 항상 검사하며 승인된 HF_TOKEN secret이 있어야 전체 APK/lint를 실행한다. 이번 배포 APK의 전체 빌드와 lint는 로컬에서 검증했다.
 
 ## 15. 남은 BLOCKER와 미검증 사항
 
 - 모델 확보/재배포 권한/최종 APK 크기에 대한 기술적 blocker는 해결했다. 두 모델은 실제 APK에 포함된다.
 - FunctionGemma 한국어 계획 0/11: 학습 범위/한국어 성능 한계다. 실패한 모델 결과는 성공처럼 표시하지 않는다.
-- Qwen의 `지브로` 의미 복구 실패와 임의 앱 다단계 GUI 성공률은 남아 있다. 실제 ambiguity/자동 해결 실패는 사용자에게 표시한다.
+- Qwen의 불완전한 음성 목적지 의미 복구와 임의 앱 다단계 GUI 성공률은 추가 검증이 필요하다. 모든 작업이 인식 후 10초 이내인 상태는 아니다. 실제 ambiguity/자동 해결 실패는 사용자에게 표시한다.
 - S25/Knox/Back Tap/Play Protect/실제 앱 작업 성공률/배터리·발열 및 휴대폰 재부팅은 NOT_VERIFIED.
 - 실제 음성 평가를 사용 조건으로 만들지 않는다. 실제 마이크 입력은 사용자가 원할 때 확인할 수 있고 이번 수치는 합성 PCM 1건 및 텍스트 계획 비교에 한정된다.
 

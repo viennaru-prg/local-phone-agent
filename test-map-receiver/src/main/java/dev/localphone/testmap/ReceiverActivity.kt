@@ -30,6 +30,14 @@ class ReceiverActivity : Activity() {
     private fun button(label: String, click: () -> Unit) = Button(this).apply { text = label; isAllCaps = false; setOnClickListener { click() } }.also(body::addView)
     private fun render() {
         val uri = intent.data; prefs.edit().putString("uri", uri?.toString().orEmpty()).commit()
+        if (mode == "ai_notes") {
+            page("ai_notes_start"); text("테스트 메모")
+            button("메모 저장 시작") {
+                count("generic_clicks"); page("ai_notes_edit"); text("테스트 메모 내용")
+                button("메모 저장") { count("generic_clicks"); page("ai_notes_done"); text("테스트 메모 저장 완료") }
+            }
+            return
+        }
         if (mode == "legacy") {
             page("legacy")
             listOf("NAVIGATION TEST RECEIVER", "Android Intent 전달 검증 화면", "목적지: ${uri?.getQueryParameter("dname")}",
@@ -59,7 +67,7 @@ class ReceiverActivity : Activity() {
             "saved_search" -> { text("저장 목록"); searchInput(true, preserve = true) }
             "public_search", "public_office" -> text("저장한 장소 없음")
             "ambiguous_office" -> { place("회사", "서울시 테스트로 11", 36.111111, 128.111111); place("회사", "서울시 테스트로 22", 36.222222, 128.222222) }
-            "saved_office", "failed_navigation", "no_coordinates" -> place("회사", "서울시 테스트로 11", 36.111111, 128.111111)
+            "saved_office", "failed_navigation", "no_coordinates", "delayed_navigation", "countdown_navigation", "auto_navigation", "wrong_auto_navigation" -> place("회사", "서울시 테스트로 11", 36.111111, 128.111111)
             else -> text("저장한 장소 없음")
         }
     }
@@ -146,11 +154,34 @@ class ReceiverActivity : Activity() {
     }
     private fun route() {
         page("route"); text(destination); text("자동차 경로")
-        button("안내 시작") {
+        fun start() {
             count("navigation_starts")
             if (mode != "failed_navigation") {
+                if (mode == "wrong_auto_navigation") destination = "엉뚱한 다른 목적지"
                 page("guidance"); text(destination); text("안내 중 · 남은 거리 4km · 도착 예정 12:30"); button("안내 종료") { page("stopped") }
             }
+        }
+        if (mode == "delayed_navigation") {
+            // Route page is present before its start control appears.
+            val pageBody = body
+            text("경로 정보 준비 중")
+            body.postDelayed({ if (!isFinishing && body === pageBody) button("안내 시작") { start() } }, 3200)
+            return
+        }
+        val startButton = button(if (mode == "countdown_navigation") "안내 시작 (3초)" else "안내 시작") { start() }
+        if (mode in listOf("countdown_navigation", "auto_navigation", "wrong_auto_navigation")) {
+            val pageBody = body; startButton.isEnabled = false
+            fun tick(seconds: Int) {
+                if (isFinishing || body !== pageBody) return
+                startButton.text = if (mode == "countdown_navigation") "안내 시작 (${seconds}초)" else "${seconds}초 후 안내 시작"
+                body.postDelayed({
+                    if (body !== pageBody || isFinishing) return@postDelayed
+                    if (seconds > 1) tick(seconds - 1)
+                    else if (mode == "countdown_navigation") { startButton.text = "안내 시작 (0초)"; startButton.isEnabled = true }
+                    else start()
+                }, 1000)
+            }
+            tick(3)
         }
     }
 }

@@ -19,7 +19,7 @@ object GoalRequests {
 /** Ephemeral, bounded accessibility observations. Tokens refer to this observation, never screen coordinates. */
 data class UiNode(val token: String, val label: String, val viewId: String = "", val role: String = "",
                   val clickable: Boolean = false, val editable: Boolean = false, val scrollable: Boolean = false,
-                  val parent: String? = null, val fingerprint: String = "")
+                  val parent: String? = null, val fingerprint: String = "", val enabled: Boolean = true)
 data class UiScreen(val packageName: String, val revision: Long, val nodes: List<UiNode>) {
     fun node(token: String) = nodes.singleOrNull { it.token == token }
     fun exact(vararg labels: String): List<UiNode> {
@@ -47,7 +47,7 @@ data class UiScreen(val packageName: String, val revision: Long, val nodes: List
 object UiFingerprint {
     fun describe(screen: UiScreen, node: UiNode): String {
         val values = (listOf(node) + screen.descendants(node.token)).take(41)
-        val shape = values.joinToString("\u0000") { "${it.role}\u0001${it.viewId}\u0001${it.label}\u0001${it.clickable}:${it.editable}:${it.scrollable}" }
+        val shape = values.joinToString("\u0000") { "${it.role}\u0001${it.viewId}\u0001${it.label}\u0001${it.clickable}:${it.editable}:${it.scrollable}:${it.enabled}" }
         return java.security.MessageDigest.getInstance("SHA-256").digest(shape.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
     }
@@ -80,6 +80,7 @@ object UiGrounding {
             UiCommand.Back -> return true
         }
         val node = screen.node(token) ?: return false
+        if (!node.enabled || command is UiCommand.Click && !screen.clickTarget(node).enabled) return false
         if (sensitive.containsMatchIn(PlaceText.normalize(node.label))) return false
         if (destructive.containsMatchIn(node.label) && !destructive.containsMatchIn(goal)) return false
         return when (command) {
@@ -87,7 +88,8 @@ object UiGrounding {
                 PlaceText.normalize(goal).contains(PlaceText.normalize(command.text)) && !command.text.any(Char::isISOControl)
             is UiCommand.Submit -> node.editable
             is UiCommand.Scroll -> node.scrollable
-            is UiCommand.Click -> node.label.isNotBlank() || node.clickable && screen.descendants(node.token).any { it.label.isNotBlank() }
+            is UiCommand.Click -> screen.clickTarget(node).clickable &&
+                (node.label.isNotBlank() || screen.descendants(node.token).any { it.label.isNotBlank() })
             UiCommand.Back -> true
         }
     }
@@ -95,6 +97,16 @@ object UiGrounding {
 
 /** A label-driven path for explicit UI requests; a local model may propose further observed-node steps. */
 object SemanticUi {
+    // Only observed start controls, including the provider's countdown suffix. Do not
+    // treat explanatory prose or an end/cancel control as a request to start guidance.
+    private val navigationStart = Regex("^(?:안내시작|주행시작|경로안내시작|내비게이션시작|내비시작|startnavigation|startguidance)(?:\\d+(?:초|s|sec|seconds)?(?:후)?)?$", RegexOption.IGNORE_CASE)
+    private val delayedNavigationStart = Regex("^(?:\\d+(?:초|s|sec|seconds)후)(?:안내시작|주행시작|경로안내시작|내비게이션시작|startnavigation|startguidance)$", RegexOption.IGNORE_CASE)
+    fun navigationStartTargets(screen: UiScreen): List<UiNode> = screen.nodes.filter { node ->
+        !node.editable && node.label.split(" · ").any { label ->
+            val value = PlaceText.normalize(label)
+            navigationStart.matches(value) || delayedNavigationStart.matches(value)
+        }
+    }.map(screen::clickTarget).filter { it.clickable }.distinctBy { it.token }
     fun clickLabel(goal: String): String? = Regex("^(.+?)(?:을|를)?\\s*(?:눌러(?:줘| 줘)?|클릭(?:해줘)?|선택(?:해줘)?|열어(?:줘| 줘)?)$")
         .matchEntire(goal.trim())?.groupValues?.get(1)?.trim()?.removeSuffix(" 버튼")?.trim()
     fun searchQuery(goal: String): String? = Regex("^(.+?)(?:을|를)?\\s*검색(?:해줘|해 줘|해|해봐|해 봐)$")

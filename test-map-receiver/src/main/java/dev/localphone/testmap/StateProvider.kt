@@ -22,7 +22,8 @@ class StateProvider : ContentProvider() {
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int {
         val mode = values?.getAsString("mode") ?: return 0
         require(mode in listOf("legacy", "saved_office", "saved_search", "public_search", "ambiguous_office", "public_office", "failed_navigation", "no_coordinates", "generic",
-            "personal_priority", "personal_home", "frequent_office", "frequent_named", "frequent_duplicate", "frequent_scroll", "personal_missing", "my_favorites"))
+            "personal_priority", "personal_home", "frequent_office", "frequent_named", "frequent_duplicate", "frequent_scroll", "personal_missing", "my_favorites", "ai_notes",
+            "delayed_navigation", "countdown_navigation", "auto_navigation", "wrong_auto_navigation"))
         prefs.edit().clear().putString("mode", mode).commit(); return 1
     }
     override fun insert(uri: Uri, values: ContentValues?): Uri? = null

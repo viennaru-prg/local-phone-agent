@@ -137,7 +137,7 @@ class VoiceInvocationTest {
         main {
             assertTrue(entry!!.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
             val text = entry!!.findViewById<TextView>(R.id.invocation_status)
-            assertEquals("듣는 중…", text.text.toString())
+            assertEquals("규칙 모드 · 듣는 중…", text.text.toString())
             assertNull(entry!!.findViewById<android.view.View>(R.id.command_input))
             assertTrue(entry!!.window.attributes.width < device.displayWidth)
         }

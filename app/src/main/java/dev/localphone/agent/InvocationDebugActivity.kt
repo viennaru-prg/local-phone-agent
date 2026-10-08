@@ -37,12 +37,20 @@ class InvocationDebugActivity : ComponentActivity() {
             }
             appendLine("Last Invocation: ${trace.sessionId}")
             appendLine("Transcript: ${trace.transcript}")
+            appendLine("Input: ${trace.origin}")
+            appendLine("App: ${trace.appVersion} (code ${trace.appVersionCode})")
+            appendLine("Installation: ${trace.profile}")
+            appendLine("AI enabled: ${trace.modelEnabled}")
+            appendLine("Selected AI: ${trace.selectedModel}")
+            appendLine("화면 추론 AI: ${trace.uiModel.ifBlank { "해당 없음" }}")
             appendLine("Clarification: ${trace.clarification}")
             appendLine("Mic ready: ${ms("T0", "T2")}")
             appendLine("STT after capture: ${ms("T4", "T5")}")
             appendLine("STT load: ${trace.stt?.modelLoadMs ?: "미측정"} ms / cold=${trace.stt?.coldModel}")
             appendLine("Model load: ${trace.agentLoad?.loadMs ?: "미측정"} ms / available=${trace.agentLoad?.available}")
             appendLine("Model inference: ${trace.modelInferenceMs ?: "미측정"} ms")
+            appendLine("음성 인식 완료 → 작업 완료: ${ms("T5", "T8")} (목표 10,000 ms)")
+            appendLine("Prefill/generation: ${trace.modelResponse?.timing ?: "미측정"}")
             appendLine("Interpretation: ${trace.interpretation}")
             appendLine("Policy: ${trace.policy}")
             appendLine("Execution: ${trace.execution}")
@@ -52,9 +60,10 @@ class InvocationDebugActivity : ComponentActivity() {
             appendLine("Samsung Secure Folder 여부는 Android 공개 API로 확정하지 않습니다.")
             appendLine("\n" + GsonBuilder().setPrettyPrinting().create().toJson(trace))
         }
+        val current = "현재 설치: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) / ${ProfileScope(this).user}\n선택 모델: ${graph.planner.selected.key}\n\n"
         setContentView(ScrollView(this).apply {
             addView(TextView(this@InvocationDebugActivity).apply {
-                this.text = text; textSize = 14f; setTextIsSelectable(true)
+                this.text = current + text; textSize = 14f; setTextIsSelectable(true)
                 val padding = (24 * resources.displayMetrics.density).toInt(); setPadding(padding, padding * 2, padding, padding)
             })
         })

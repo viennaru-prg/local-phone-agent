@@ -15,7 +15,10 @@ internal object ToolJsonGrammar {
                 else when (schema["type"]) {
                     "string" -> "string"
                     "integer" -> "integer"
-                    "array" -> "\"[\" ws (string (\",\" ws string){0,7})? ws \"]\""
+                    "array" -> {
+                        @Suppress("UNCHECKED_CAST") val item = value(schema["items"] as Map<String, Any>)
+                        "\"[\" ws ($item (\",\" ws $item){0,7})? ws \"]\""
+                    }
                     else -> error("Unsupported tool parameter type")
                 }
             return name
@@ -34,7 +37,7 @@ internal object ToolJsonGrammar {
         }
         rules["call"] = tools.indices.joinToString(" | ") { "call$it" }
         rules["root"] = "\"{\" ws ${key("calls")} ws \":\" ws \"[\" ws (call (ws \",\" ws call){0,5})? ws \"]\" ws \"}\" ws"
-        rules["ws"] = "[ \\t\\n\\r]*"
+        rules["ws"] = "[ \\t\\n\\r]{0,4}"
         rules["integer"] = "\"-\"? ([0-9] | [1-9] [0-9]{0,8})"
         rules["string"] = """
             "\"" ([^"\\\x00-\x1f] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F]{4}))* "\""

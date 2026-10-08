@@ -174,6 +174,29 @@ class AccessibilityGoalTest {
         assertEquals(InvocationState.EXECUTION_FAILED, outcome.failure?.state); assertEquals(false, outcome.execution?.success)
         assertEquals(1, count("navigation_starts")); assertNull(office()); assertNull(cache())
     }
+    @Test fun delayedStartControlIsReobservedAndClickedExactlyOnce() {
+        mode("delayed_navigation")
+        success(result(task("회사로 가자")))
+        assertEquals("guidance", state()["screen"]); assertEquals(1, count("navigation_starts")); assertNotNull(cache())
+    }
+    @Test fun disabledCountdownWaitsWithoutWastingActionsThenStartsGuidance() {
+        mode("countdown_navigation")
+        val outcome = result(task("회사로 가자")); success(outcome)
+        assertEquals(listOf("NAVIGATION_ACTIVE_AFTER_START"), outcome.evidence)
+        assertEquals("guidance", state()["screen"]); assertEquals(1, count("navigation_starts")); assertNotNull(office())
+    }
+    @Test fun providerAutomaticCountdownRequiresObservedPreviewAndMatchingActiveDestination() {
+        mode("auto_navigation")
+        val outcome = result(task("회사로 가자")); success(outcome)
+        assertEquals(listOf("NAVIGATION_ACTIVE_AFTER_OBSERVED_COUNTDOWN"), outcome.evidence)
+        assertEquals(1, count("navigation_starts")); assertNotNull(cache())
+    }
+    @Test fun automaticCountdownForAnotherDestinationCannotSucceedOrCache() {
+        mode("wrong_auto_navigation")
+        val outcome = result(task("회사로 가자"))
+        assertNotNull(outcome.failure); assertEquals(false, outcome.execution?.success)
+        assertEquals(1, count("navigation_starts")); assertNull(office()); assertNull(cache())
+    }
     @Test fun coordinatesNotExposedAreNotInventedButProviderIdentityCanBeCached() {
         mode("no_coordinates")
         success(result(task("회사로 가자")))

@@ -12,7 +12,10 @@ data class InvocationTrace(val sessionId: String, val invokedAt: Long = System.c
     val clarification: String, val stt: SpeechMetrics?, val agentLoad: ModelPreparation?,
     val modelInferenceMs: Long?, val toolPlan: String, val policy: String, val execution: String,
     val disposition: String, val result: String, val error: String, val audioFocus: String,
-    val duplicateInvocations: Int, val totalMs: Long, val speech: SpeechDiagnostic? = null)
+    val duplicateInvocations: Int, val totalMs: Long, val speech: SpeechDiagnostic? = null,
+    val selectedModel: String = "", val modelResponse: ModelResponse? = null,
+    val appVersion: String = BuildConfig.VERSION_NAME, val appVersionCode: Int = BuildConfig.VERSION_CODE,
+    val modelEnabled: Boolean = true, val uiModel: String = "")
 
 /** One bounded encrypted trace, private to this installation. Never logcat or shared storage. */
 class InvocationDebugStore(private val settings: SecureSettings) {
@@ -21,8 +24,12 @@ class InvocationDebugStore(private val settings: SecureSettings) {
         private set
     fun write(trace: InvocationTrace) {
         last = trace
-        if (!BuildConfig.DEBUG && settings.get("stt_diagnostics") != "yes") return
-        worker.execute { runCatching { settings.put("last_voice_trace", Gson().toJson(trace)) } }
+        // Keep routing/model metadata across process restarts even when detailed speech
+        // diagnostics are off. Command text and model/screen contents remain opt-in.
+        val persisted = if (BuildConfig.DEBUG || settings.get("stt_diagnostics") == "yes") trace else trace.copy(
+            transcript = "", clarification = "", speech = null, stt = null, toolPlan = "", policy = "", execution = "",
+            modelResponse = null, error = "", interpretation = trace.interpretation.substringBefore(';'))
+        worker.execute { runCatching { settings.put("last_voice_trace", Gson().toJson(persisted)) } }
     }
     fun read(): InvocationTrace? = last ?: runCatching {
         Gson().fromJson(settings.get("last_voice_trace"), InvocationTrace::class.java)

@@ -11,7 +11,7 @@ object ModelToolCatalog {
     private val descriptions = mapOf(
         "open_app" to "Launch an app (앱 열어/켜/실행). app_name is the named app. No navigation or destination.",
         "navigate" to "Start route guidance to a place (가자/가줘/네비/길안내). Opening a map app uses open_app.",
-        "perform_app_task" to "App search/save/read (검색/저장/읽기), including notifications 알림. Copy the original goal. Unnamed app: empty app_name.",
+        "perform_app_task" to "App search/save/read (검색/저장/읽기), including notifications 알림. goal MUST copy the entire user command verbatim, without shortening. Unnamed app: empty app_name.",
         "set_alarm" to "Clock alarm (알람). Requires an explicit time. This does not read notifications (알림).",
         "set_timer" to "Countdown timer (타이머) for a duration in seconds.",
         "media_resume" to "Play or resume music (음악/노래 재생/틀어).",
@@ -41,13 +41,51 @@ object ModelToolCatalog {
         schema("ui_choose", "Ask about actual ambiguous observed candidates.", mapOf("prompt" to text,
             "nodes" to mapOf("type" to "array", "items" to node, "minItems" to 1, "maxItems" to 8))),
     )
-    data class Observation(val user: String, val tokens: Set<String>)
+    data class Observation(val user: String, val tokenByAlias: Map<String, String>, val actions: Map<String, List<String>>) {
+        val tokens get() = tokenByAlias.values.toSet()
+    }
     fun observation(goal: String, screen: UiScreen, history: List<String>, limit: Int): Observation {
         val shown = (screen.nodes.filter { it.clickable || it.editable || it.scrollable } + screen.nodes.filter { it.label.isNotBlank() })
             .distinctBy { it.token }.take(limit)
-        return Observation(Gson().toJson(mapOf("user_goal" to goal, "package" to screen.packageName,
-            "nodes" to shown.map { mapOf("node" to it.token, "label" to it.label.take(100), "role" to it.role.substringAfterLast('.'),
-                "clickable" to it.clickable, "editable" to it.editable, "scrollable" to it.scrollable) }, "history" to history.takeLast(3))), shown.map { it.token }.toSet())
+        val aliases = shown.mapIndexed { index, node -> "n$index" to node.token }.toMap()
+        fun ids(check: (UiNode) -> Boolean) = shown.mapIndexedNotNull { index, node -> if (check(node)) "n$index" else null }
+        val actions = mapOf("ui_click" to ids { it.enabled && screen.clickTarget(it).let { target -> target.clickable && target.enabled } },
+            "ui_set_text" to ids { it.enabled && it.editable }, "ui_submit" to ids { it.enabled && it.editable },
+            "ui_scroll" to ids { it.enabled && it.scrollable }, "ui_complete" to ids { it.label.isNotBlank() },
+            "ui_choose" to ids { it.enabled && it.label.isNotBlank() && screen.clickTarget(it).clickable })
+        // Compact IDs are resolved only against THIS observation. Actual service tokens and
+        // fingerprints remain unchanged, and never become model-generated coordinates.
+        val nodes = shown.mapIndexed { index, node -> listOf("n$index", node.label.take(100),
+            node.role.substringAfterLast('.'), if (node.clickable) "click" else "",
+            if (node.editable) "edit" else "", if (node.scrollable) "scroll" else "", if (node.enabled) "enabled" else "disabled") }
+        return Observation(Gson().toJson(mapOf("goal" to goal, "app" to screen.packageName,
+            "node_columns" to "id,label,role,clickable,editable,scrollable,enabled", "nodes" to nodes,
+            "history" to history.takeLast(3).map { it.take(180) })), aliases, actions)
+    }
+    fun uiFor(observation: Observation): List<Map<String, Any>> = ui.filter { tool ->
+        tool["name"] == "ui_back" || observation.actions[tool["name"]].orEmpty().isNotEmpty()
+    }.map { tool ->
+        @Suppress("UNCHECKED_CAST") val parameters = tool["parameters"] as Map<String, Any>
+        @Suppress("UNCHECKED_CAST") val properties = parameters["properties"] as Map<String, Map<String, Any>>
+        tool + ("parameters" to (parameters + ("properties" to properties.mapValues { (name, value) ->
+            when (name) {
+                "node" -> value + ("enum" to observation.actions[tool["name"]].orEmpty())
+                "nodes" -> value + ("items" to (node + ("enum" to observation.actions[tool["name"]].orEmpty())))
+                else -> value
+            }
+        })))
+    }
+    fun decodeUi(calls: List<RawToolCall>, observation: Observation): UiProposal {
+        val mapped = calls.map { call ->
+            val args = call.arguments.toMutableMap()
+            if ("node" in args) args["node"] = observation.tokenByAlias[args["node"]] ?: return UiProposal.Unavailable
+            if ("nodes" in args) {
+                val aliases = args["nodes"] as? List<*> ?: return UiProposal.Unavailable
+                args["nodes"] = aliases.map { observation.tokenByAlias[it] ?: return UiProposal.Unavailable }
+            }
+            RawToolCall(call.name, args)
+        }
+        return decodeUi(mapped, observation.tokens)
     }
     fun decodeUi(calls: List<RawToolCall>, tokens: Set<String>): UiProposal {
         val call = calls.singleOrNull() ?: return UiProposal.Unavailable

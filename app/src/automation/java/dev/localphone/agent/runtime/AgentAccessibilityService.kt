@@ -109,7 +109,7 @@ class AgentAccessibilityService : AccessibilityService(), UiAccess {
             if (android.os.Build.VERSION.SDK_INT >= 34 && node.isAccessibilityDataSensitive) return
             if (node.packageName?.toString() != target) return
             nodes += UiNode(token, label(node), node.viewIdResourceName.orEmpty(), node.className?.toString().orEmpty(),
-                node.isClickable, node.isEditable, node.isScrollable, parent)
+                node.isClickable, node.isEditable, node.isScrollable, parent, enabled = node.isEnabled)
             for (index in 0 until node.childCount) {
                 val child = runCatching { node.getChild(index) }.getOrNull() ?: continue
                 try { visit(child, "$token.$index", token, depth + 1) } finally { release(child) }
@@ -150,7 +150,7 @@ class AgentAccessibilityService : AccessibilityService(), UiAccess {
             val node = find(root, expected.token) ?: return false
             try {
                 // Revalidate the observed element on the live tree. Never reuse a stale node handle.
-                if (!node.isVisibleToUser || node.isPassword || node.packageName?.toString() != target ||
+                if (!node.isVisibleToUser || !node.isEnabled || node.isPassword || node.packageName?.toString() != target ||
                     label(node) != expected.label || node.viewIdResourceName.orEmpty() != expected.viewId ||
                     node.className?.toString().orEmpty() != expected.role) return false
                 if (expected.fingerprint.isNotBlank() && liveFingerprint(node) != expected.fingerprint) return false
@@ -180,7 +180,7 @@ class AgentAccessibilityService : AccessibilityService(), UiAccess {
             if (depth > 18 || values.size >= 41 || !node.isVisibleToUser || node.isPassword || node.packageName?.toString() != target) return
             if (android.os.Build.VERSION.SDK_INT >= 34 && node.isAccessibilityDataSensitive) return
             values += UiNode(token, label(node), node.viewIdResourceName.orEmpty(), node.className?.toString().orEmpty(),
-                node.isClickable, node.isEditable, node.isScrollable, parent)
+                node.isClickable, node.isEditable, node.isScrollable, parent, enabled = node.isEnabled)
             for (i in 0 until node.childCount) {
                 val child = runCatching { node.getChild(i) }.getOrNull() ?: continue
                 try { visit(child, "$token.$i", token, depth + 1) } finally { release(child) }

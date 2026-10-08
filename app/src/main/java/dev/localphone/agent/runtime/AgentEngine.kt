@@ -5,7 +5,7 @@ import dev.localphone.agent.AgentApplication
 import dev.localphone.core.*
 import kotlinx.coroutines.*
 
-enum class EngineStage { PLANNING, POLICY_CHECK }
+enum class EngineStage { PLANNING, MODEL_LOADING, MODEL_INFERENCE, RULE_FALLBACK, POLICY_CHECK }
 enum class ResultDisposition { BACKGROUND_ACTION, FOREGROUND_NAVIGATION, FOREGROUND_TOOL }
 data class AgentFailure(val state: InvocationState, val message: String)
 data class PreparedRequest(val plan: ToolPlan, val decision: PolicyDecision,
@@ -16,6 +16,13 @@ data class AgentOutcome(val execution: ExecutionResult?, val disposition: Result
 
 /** Goals own the execution lifecycle. Fast-path availability is not a policy precondition. */
 class AgentEngine(private val activity: Activity, private val graph: AgentApplication) {
+    fun stageMessage(stage: EngineStage) = when (stage) {
+        EngineStage.PLANNING -> "명령 확인 중…"
+        EngineStage.MODEL_LOADING -> "${graph.embeddedModels.info(graph.planner.selected).name} 준비 중…"
+        EngineStage.MODEL_INFERENCE -> "${graph.embeddedModels.info(graph.planner.selected).name}가 명령 해석 중…"
+        EngineStage.RULE_FALLBACK -> "AI 해석을 완료하지 못해 다른 실행 경로 확인 중…"
+        EngineStage.POLICY_CHECK -> "실행 방법 확인 중…"
+    }
     val navigation = NaverNavigation(activity)
     val media = AndroidMedia(activity, graph.settings)
     private val device = AndroidDeviceTools(activity)
@@ -42,14 +49,17 @@ class AgentEngine(private val activity: Activity, private val graph: AgentApplic
         var modelError = ""
         var interpretation = "RULE_BASED"
         if (useModel) {
+            onStage(EngineStage.MODEL_LOADING)
             val prepared = graph.planner.prepare()
             if (prepared.available) {
+                onStage(EngineStage.MODEL_INFERENCE)
                 plan = graph.planner.plan(utterance)
                 if (plan.actions.isNotEmpty()) interpretation = "MODEL_INFERENCE:${graph.planner.selected.key}"
                 else modelError = graph.planner.lastError
             } else modelError = prepared.error.orEmpty()
         }
         if (plan.actions.isEmpty()) {
+            if (useModel) onStage(EngineStage.RULE_FALLBACK)
             plan = BasicCommandPlanner().plan(utterance)
             interpretation = "RULE_BASED" + if (modelError.isNotBlank()) "; selected=${graph.planner.selected.key}; $modelError" else ""
             if (plan.unsupportedReason?.let { it.startsWith("유효한 알람") || it.startsWith("타이머는") } == true) {

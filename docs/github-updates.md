@@ -28,14 +28,14 @@ GitHub CI는 항상 core 검사를 수행합니다. 승인받은 FunctionGemma �
 
 | 용도 | APK | Manifest | versionCode |
 |---|---|---|---|
-| 직접 설치·최종 앱 | `LocalPhoneAgent-dual-model.apk` | `update-dual.json` | 9 |
+| 직접 설치·최종 앱 | `LocalPhoneAgent-dual-model.apk` | `update-dual.json` | 10 |
 | 기존 앱의 업데이트 크기 제한 해제 | `LocalPhoneAgent-automation.apk` | `update.json` | 8 |
 
-기존 앱의 업데이트 확인은 작은 준비판(8)을 설치합니다. 준비판에서 다시 업데이트 확인을 누르면 두 모델이 포함된 최종판(9)을 받습니다. 각 단계는 Android 설치 화면에서 승인이 필요합니다. 준비판은 모델을 포함한 최종 앱이 아닙니다. 새로 설치할 때는 `LocalPhoneAgent-dual-model.apk` 하나만 사용합니다.
+기존 앱의 업데이트 확인은 작은 준비판(8)을 설치합니다. 준비판에서 다시 업데이트 확인을 누르면 두 모델이 포함된 최종판(10)을 받습니다. 이미 두 모델이 포함된 0.7.0(9) 사용자는 최종판(10)을 바로 받습니다. 각 단계는 Android 설치 화면에서 승인이 필요합니다. 준비판은 모델을 포함한 최종 앱이 아닙니다. 새로 설치할 때는 `LocalPhoneAgent-dual-model.apk` 하나만 사용합니다.
 
 준비판은 배포된 0.6 commit `4bd1ea73f674b27d610448c24d5a6f9851ebaf6c`의 기존 실행 구조에 새 파일명·2 GiB 상한·설치 완료 캐시 정리·업데이트 안내를 적용한 것입니다. 모델을 인터넷에서 추가로 내려받는 방식으로 바꾸지 않습니다. 최종 APK와 같은 개인 서명 키를 사용합니다.
 
-재현할 때는 별도 0.6 checkout에서 이 저장소의 `scripts/update-bridge-0.7.patch`를 `git apply`하고, 기존 음성 assets와 개인 서명 키를 준비한 뒤 `:app:assembleAutomation :app:lintAutomation -PreleaseVersionCode=8 -PreleaseVersionName=0.7.0`을 실행합니다. patch에는 가중치나 인증 정보가 없습니다. 준비판 빌드에 새 Agent 모델을 넣거나 최종판의 versionCode를 낮추지 않습니다.
+재현할 때는 별도 0.6 checkout에서 이 저장소의 `scripts/update-bridge-0.7.patch`를 `git apply`하고, 기존 음성 assets와 개인 서명 키를 준비한 뒤 `:app:assembleAutomation :app:lintAutomation -PreleaseVersionCode=8 -PreleaseVersionName=0.7.1`을 실행합니다. 준비판의 versionName도 해당 Release 태그와 일치해야 이전 updater의 버전 검사를 통과합니다. patch에는 가중치나 인증 정보가 없습니다. 준비판 빌드에 새 Agent 모델을 넣거나 최종판의 versionCode를 낮추지 않습니다.
 
 업데이트 다운로드 전에는 APK 다운로드와 Android 설치 스테이징을 위한 공간을 확인합니다. 최종 모델은 압축하지 않은 APK assets에서 앱 전용 `noBackupFilesDir`로 필요한 모델만 추출하고 SHA-256을 검사합니다. 두 모델을 한 번씩 사용하면 둘의 디스크 사본이 남지만 네이티브 추론 메모리에는 선택된 모델 하나만 유지합니다. 오래된 모델 revision·중단된 추출 파일·이전 업데이트 APK는 앱 소유 디렉터리 안에서 정리합니다.
 

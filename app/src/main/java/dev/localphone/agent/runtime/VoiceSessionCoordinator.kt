@@ -46,7 +46,9 @@ class VoiceSessionCoordinator(
     private var planText = ""
     private var policyText = ""
     private var executionText = ""
-    private var interpretation = "RULE_BASED"
+    private var interpretation = "NOT_PLANNED"
+    private var phoneResponse: ModelResponse? = null
+    private val previousModelResponse = graph.planner.lastResponse
     private var disposition = ResultDisposition.BACKGROUND_ACTION
     private var focusStatus = "NOT_REQUESTED"
     private var duplicates = 0
@@ -68,6 +70,9 @@ class VoiceSessionCoordinator(
         return true
     }
     fun duplicate() { if (active) duplicates++ }
+    fun hostStopped(continues: Boolean) {
+        if (active) transitions += if (continues) "ENTRY_STOPPED_COMMAND_CONTINUES" else "ENTRY_STOPPED_CANCELLED"
+    }
     private fun move(next: InvocationState, message: String) {
         if (machine.move(next)) { transitions += next.name; observer.onState(next, message) }
     }
@@ -177,6 +182,9 @@ class VoiceSessionCoordinator(
     }
     private fun process(text: String) {
         work = scope.launch {
+            var progress: Job? = null
+            var planningMessage = "명령 확인 중…"
+            val planningAt = SystemClock.elapsedRealtime()
             try {
                 val request = if (clarification != null) {
                     move(InvocationState.PLANNING, "장소 확인 중…")
@@ -184,12 +192,25 @@ class VoiceSessionCoordinator(
                     engine.clarify(checkNotNull(clarification), text)
                 } else {
                     engine.prepareSpeech(speechEvidence ?: ResolvedTranscript(emptyList(), text, false, null, emptyList(), emptyList()), useModel) { stage ->
-                        if (stage == EngineStage.PLANNING) move(InvocationState.PLANNING, "처리 중…")
-                        else { mark("T6"); move(InvocationState.POLICY_CHECK, "처리 중…") }
+                        planningMessage = engine.stageMessage(stage)
+                        when (stage) {
+                            EngineStage.PLANNING -> {
+                                move(InvocationState.PLANNING, planningMessage)
+                                progress = launch {
+                                    while (active && state == InvocationState.PLANNING) {
+                                        observer.onState(state, "$planningMessage (${(SystemClock.elapsedRealtime() - planningAt) / 1000}초)")
+                                        delay(1000)
+                                    }
+                                }
+                            }
+                            EngineStage.POLICY_CHECK -> { progress?.cancel(); mark("T6"); move(InvocationState.POLICY_CHECK, planningMessage) }
+                            else -> observer.onState(state, planningMessage)
+                        }
                     }
                 }
                 if (!active) return@launch
                 planText = request.plan.toString(); policyText = request.decision.toString(); interpretation = request.interpretation
+                phoneResponse = if (useModel) graph.planner.lastResponse else null
                 if (request.clarification != null && machine.clarifyOnce()) {
                     clarification = request.clarification
                     transitions += "AMBIGUOUS_CLARIFICATION_ONCE"; transitions += InvocationState.STARTING.name
@@ -212,7 +233,8 @@ class VoiceSessionCoordinator(
                 outcome.failure?.let { finish(it.state, it.message); return@launch }
                 finish(InvocationState.SUCCESS, outcome.execution?.message.orEmpty())
             } catch (cancelled: CancellationException) { if (active) finish(InvocationState.CANCELLED, "화면 작업을 취소했습니다.") }
-            catch (_: Exception) { if (active) finish(InvocationState.EXECUTION_FAILED, "작업을 처리하지 못했습니다.") }
+            catch (failure: Exception) { if (active) finish(InvocationState.EXECUTION_FAILED, "작업을 처리하지 못했습니다. ${failure.message.orEmpty().take(180)}") }
+            finally { progress?.cancel() }
         }
     }
     fun cancel() { if (active) finish(InvocationState.CANCELLED, "취소했습니다.") }
@@ -223,14 +245,18 @@ class VoiceSessionCoordinator(
         deadline?.cancel(); focus.release()
         if (result == InvocationState.SUCCESS) feedback.success()
         else if (result != InvocationState.CANCELLED) feedback.failure()
+        val currentResponse = if (useModel) graph.planner.lastResponse?.takeUnless { it === previousModelResponse } else null
         graph.invocationDebug.write(InvocationTrace(sessionId = sessionId, profile = engine.profile.user,
             interpretation = interpretation,
             times = times.toMap(), transitions = transitions.toList(), transcript = transcript,
             clarification = clarificationText, stt = metrics, agentLoad = if (useModel) graph.planner.lastLoad else null,
-            modelInferenceMs = if (useModel) graph.planner.lastInferenceMs else null, toolPlan = planText,
+            modelInferenceMs = currentResponse?.inferenceMs, toolPlan = planText,
             policy = policyText, execution = executionText, disposition = disposition.name, result = result.name,
             error = if (result == InvocationState.SUCCESS) "" else error, audioFocus = focusStatus,
-            duplicateInvocations = duplicates, totalMs = SystemClock.elapsedRealtime() - invokedAt, speech = speechDiagnostic))
+            duplicateInvocations = duplicates, totalMs = SystemClock.elapsedRealtime() - invokedAt, speech = speechDiagnostic,
+            selectedModel = graph.planner.selected.key, modelResponse = currentResponse, modelEnabled = useModel,
+            uiModel = if (useModel && times.containsKey("T7") && graph.planner.lastResponse !== phoneResponse &&
+                graph.planner.lastResponse?.calls?.any { it.name.startsWith("ui_") } == true) graph.planner.selected.key else ""))
         graph.invocationArbiter.release(sessionId); ownsLease = false
         warming?.cancel(); work?.cancel()
         if (useModel) { graph.planner.cancel(); graph.planner.releaseAfterIdle() }

@@ -45,6 +45,7 @@ class AccessibilityGoalTest {
         throw failure ?: AssertionError("Timed out")
     }
     @Before fun prepareOwnedEmulatorAndActualService() {
+        graph.agentModelEnabledOverride = false
         automation = instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
         val info = automation.serviceInfo
         info.flags = info.flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
@@ -72,6 +73,7 @@ class AccessibilityGoalTest {
         await { assertTrue("OS service must actually be bound", graph.uiAutomation.available) }
     }
     @After fun restoreOwnedEmulatorOnly() {
+        graph.agentModelEnabledOverride = null
         main { pending?.cancel(); entry?.coordinator?.cancel(); entry?.finish(); activity?.finish() }
         await { assertFalse(graph.uiAutomation.active) }
         graph.speechFactoryOverride = null; graph.focusFactoryOverride = null

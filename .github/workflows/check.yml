@@ -12,12 +12,34 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-      - name: Prepare pinned offline speech inputs
-        run: python3 scripts/prepare-assets.py
-      - name: Compile and verify
-        run: bash gradlew :core:test :app:assembleAutomation :app:lintAutomation --no-daemon
+      - name: Verify core contracts
+        run: bash gradlew :core:test --no-daemon
+      - name: Check licensed model build availability
+        id: models
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -n "$HF_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Full APK build requires authorized FunctionGemma mobile-actions access in HF_TOKEN. Core tests run; full APK and lint are not exercised here. Published APK uses separately verified local builds."
+          fi
+      - name: Prepare pinned offline inputs
+        if: steps.models.outputs.available == 'true'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python3 scripts/prepare-assets.py
+          python3 scripts/prepare-agent-models.py
+          sdkmanager 'ndk;28.2.13676358' 'cmake;3.22.1'
+      - name: Compile full embedded-model APK and lint
+        if: steps.models.outputs.available == 'true'
+        run: bash gradlew :app:assembleAutomation :app:lintAutomation --no-daemon
       # Distribution requires the existing private signing key. CI does not publish its generated debug key.

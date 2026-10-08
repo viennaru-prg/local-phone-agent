@@ -2,7 +2,11 @@
 
 ## 준비와 빠른 실행 경로
 
-`AgentEngine.prepare`는 원래 발화를 기준으로 Android 도구를 먼저 찾습니다. `BasicCommandPlanner`는 알려진 문법의 빠른 경로이고, 선택적인 FunctionGemma가 함수 계획을 제안할 수 있습니다. 알려진 도구로 계획할 수 없으면 `GoalRequests`가 발화를 `Action.AppTask`로 유지합니다. 앱별 함수를 등록하지 않은 앱도 런처 이름과 관측 UI로 작업할 수 있습니다. 단일 목적지 Intent가 지원하지 않는 경유 명령도 원래 목표를 AppTask로 넘기며, 복잡한 경유 계획의 실제 수행은 로컬 모델과 대상 앱에 달려 있습니다.
+`AgentEngine.prepare`는 선택된 내장 로컬 모델로 원래 발화를 먼저 해석합니다. `LocalAgentModels`는 FunctionGemma/LiteRT-LM와 Qwen/llama.cpp의 서로 다른 tokenizer·대화 포맷을 adapter에 가두고 동일한 `PhoneTools` 계획을 `PlanGrounding`과 정책에 전달합니다. 실제 생성 결과는 `MODEL_INFERENCE:<id>`, 실패 후 기존 `BasicCommandPlanner` 경로는 `RULE_BASED`로 기록합니다. 알려진 도구로 계획할 수 없으면 `GoalRequests`가 발화를 `Action.AppTask`로 유지합니다. 앱별 함수를 등록하지 않은 앱도 런처 이름과 관측 UI로 작업할 수 있습니다.
+
+모델 전환·추론·해제는 하나의 mutex를 사용합니다. 진행 중인 명령 lease가 있으면 선택 변경을 보류합니다. 이전 native 세션을 종료하고 가중치를 해제한 뒤 새 파일을 검증·로드하고 실제 Wi-Fi 설정 도구 추론 probe를 수행합니다. probe는 Android 도구를 실행하지 않습니다. 성공 후에만 암호화 선택을 저장하며 실패하면 기존 선택 복구를 시도합니다. 취소는 native worker 종료를 기다린 뒤 자원을 해제합니다. 30초 idle eviction은 상시 추론을 하지 않고 다음 호출에서 다시 준비합니다.
+
+두 가중치는 비압축 APK assets에 있지만 실행 엔진이 파일 경로를 요구하므로 앱의 noBackupFilesDir로 스트리밍 추출합니다. 크기·SHA-256 검증, 임시 파일·atomic move, 저장공간 확인과 버전별 정리가 있습니다. 준비 단계는 네트워크를 사용하지 않습니다. A/B는 모델 선택만 바꾸며 STT를 변경하지 않습니다.
 
 `PolicyGate`는 잘못된 시간·실제 이름 충돌·명령 범위를 검사합니다. 장소 부재, 검색 API 미설정, 공식 함수 부재는 정책 거절이 아닙니다. `Ready`는 선택적인 destination/deviceCommands와 원래 navigationGoal/pendingDevices/appTasks를 함께 보존합니다. 장소를 찾지 못했다고 음악만 실행하지 않으며, 실행 중 부분 수행이 발생하면 결과·완료 증거를 구분합니다. `ActionExecutor`는 독립적인 구조화 경로 전용이고 미해결 목표를 완료로 표시하지 않습니다. 실제 Activity는 비동기 `AgentEngine.execute`를 사용합니다.
 
@@ -26,7 +30,7 @@ UserPlaces의 정확한 장소가 있으면 그 좌표를 네이버 navigation D
 
 `UiSession`은 현재 관측의 token만 사용합니다. 텍스트 입력은 목표의 문구로 제한합니다. 클릭/입력/IME submit/스크롤/앱 내부 Back을 지원합니다. live click은 역할·ID·레이블·하위 내용 fingerprint를 재검사하므로 경로가 재사용된 다른 항목을 누르지 않습니다. ACTION_CLICK이 지원되지 않으면 확인한 요소의 실제 bounds 중심에서만 gesture를 시도합니다. 임의 좌표나 화면 밖 터치 계획을 받지 않습니다.
 
-`GenericUiGoal`은 앱별 selector 없이 관측 이름의 직접 선택·검색·음악 컨트롤을 시도합니다. 추가 단계는 로컬 FunctionGemma가 관측 노드만 사용하는 ui_click/ui_set_text/ui_submit/ui_scroll/ui_back을 제안합니다. 자동 tool execution은 꺼 두고 `UiGrounding`과 서비스가 각 제안을 다시 검사합니다. UI 문구의 명령 주입을 권한으로 취급하지 않습니다. 모델의 완료 선언만으로 성공하지 않으며 새로운 실제 완료 표시와 수행 이력을 확인합니다. 현재 가중치가 없으므로 실제 모델의 계획 품질과 CPU 성능은 미검증입니다.
+`GenericUiGoal`은 앱별 selector 없이 관측 이름의 직접 선택·검색·음악 컨트롤을 시도합니다. 추가 단계는 선택된 내장 모델이 관측 노드만 사용하는 ui_click/ui_set_text/ui_submit/ui_scroll/ui_back을 제안합니다. 자동 tool execution은 꺼 두고 `UiGrounding`과 서비스가 각 제안을 다시 검사합니다. UI 문구의 명령 주입을 권한으로 취급하지 않습니다. 모델의 완료 선언만으로 성공하지 않으며 새로운 실제 완료 표시와 수행 이력을 확인합니다. 작은 Mobile Actions 모델에 범용 GUI 이해 능력을 가정하지 않으며 실제 계획 실패를 `TOOL_SELECTION` 또는 `MODEL_INFERENCE`로 표시합니다.
 
 UI 횟수·같은 동작 반복·앱 이탈·잠금을 제한합니다. 작은 OS 접근성 overlay로 진행·실제 모호한 후보·취소를 표시합니다. 사용자가 취소하면 뒤늦은 음성 결과, 클릭, navigation, 캐시를 실행하지 않습니다. 인증·송금·결제·권한 승인은 자동화 범위 밖입니다.
 
@@ -54,7 +58,7 @@ context 준비 → AudioFocus → 150ms 안정화 → native 시작 → onReadyF
 
 core는 목표 보존·빠른 경로 실패·좌표·음성 계획·관측 token/fingerprint 검사를 수행합니다. Android instrumentation은 실제 OS AccessibilityService가 별도의 testOnly 앱의 Views를 누르고 검색·선택·주행 상태를 관측하게 합니다. fixture의 NAVER 패키지는 URI 계약 시험용이며 실제 네이버 앱으로 설명하지 않습니다. shell 접근성 허용은 확인된 전용 AVD의 테스트 코드에만 존재합니다.
 
-최종 APK 해시가 설치판 검사 기록과 일치하는지 패키징에서 확인합니다. 기존 개발판 전체 검사와 nondebug automation 검사 수는 중복 합산하지 않습니다. S25 일반 영역의 과거 USB 설치·사용자 접근성 활성화 및 실제 네이버 집/회사·자주 가는 곳 탭 구조는 확인했습니다. 실제 네이버 안내 시작·Knox·RegiStar·음악 앱의 실제 소리·FunctionGemma inference는 별도 미검증입니다. 0.6.0은 update-verification.json과 automation-test/stt-shipping.json에 기록합니다. 이전 0.5.1은 history/0.5.1에 보존합니다.
+최종 APK 해시가 설치판 검사 기록과 일치하는지 패키징에서 확인합니다. 기존 개발판 전체 검사와 nondebug automation 검사 수는 중복 합산하지 않습니다. S25 일반 영역의 과거 USB 설치·사용자 접근성 활성화 및 실제 네이버 집/회사·자주 가는 곳 구조는 확인했습니다. 0.7.0의 S25 모델 실행·실제 네이버 안내 시작·Knox·RegiStar·음악 앱의 실제 소리는 별도 미검증입니다. 모델 원출력·A/B 의미 일치율·성능 및 회귀 결과는 dual-model-results.md와 Release의 update-verification.json에 기록합니다.
 
 ## 앱 업데이트
 

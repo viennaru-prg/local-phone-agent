@@ -1,13 +1,17 @@
+import groovy.json.JsonSlurper
+import java.security.MessageDigest
+
 plugins { id("com.android.application"); kotlin("android"); kotlin("kapt") }
 android {
     namespace = "dev.localphone.agent"
     compileSdk = 35
+    ndkVersion = "28.2.13676358"
     defaultConfig {
         applicationId = "dev.localphone.agent"
         minSdk = 26
         targetSdk = 35
-        versionCode = providers.gradleProperty("releaseVersionCode").getOrElse("7").toInt()
-        versionName = providers.gradleProperty("releaseVersionName").getOrElse("0.6.0")
+        versionCode = providers.gradleProperty("releaseVersionCode").getOrElse("9").toInt()
+        versionName = providers.gradleProperty("releaseVersionName").getOrElse("0.7.0")
         val updateRepository = providers.gradleProperty("updateRepository").getOrElse("viennaru-prg/local-phone-agent")
         require(Regex("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+").matches(updateRepository))
         buildConfigField("String", "UPDATE_REPOSITORY", "\"$updateRepository\"")
@@ -15,6 +19,7 @@ android {
         buildConfigField("boolean", "UI_AUTOMATION_AVAILABLE", "true")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        externalNativeBuild { cmake { cppFlags += "-std=c++17" } }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     buildFeatures { buildConfig = true }
@@ -47,7 +52,39 @@ android {
         if (testBuildType == "install") getByName("androidTest").java.srcDir("src/installTest/java")
     }
     packaging { resources.excludes += setOf("META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*") }
+    androidResources { noCompress += listOf("litertlm", "gguf") }
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
 }
+val modelManifest = rootProject.file("agent-models.json")
+val embeddedModels = (JsonSlurper().parse(modelManifest) as Map<*, *>)["models"] as List<Map<String, Any>>
+val verifyEmbeddedAgentModels by tasks.registering {
+    inputs.file(modelManifest)
+    inputs.files(embeddedModels.map { file("src/main/assets/${it["asset"]}") })
+    val notices = listOf("Gemma-Terms.txt", "Gemma-Prohibited-Use.txt", "Gemma-NOTICE.txt", "Qwen-Apache-2.0.txt", "Qwen-quantization-card.md", "llama.cpp-MIT.txt")
+    inputs.files(notices.map { file("src/main/assets/licenses/$it") })
+    doLast {
+        notices.forEach { require(file("src/main/assets/licenses/$it").isFile) { "Required model license missing: $it" } }
+        embeddedModels.forEach { entry ->
+            val weight = file("src/main/assets/${entry["asset"]}")
+            require(weight.isFile && weight.length() == (entry["bytes"] as Number).toLong()) {
+                "Embedded weight missing/wrong size: ${entry["id"]}. See scripts/prepare-agent-models.py; a weights-free APK is forbidden."
+            }
+            val digest = MessageDigest.getInstance("SHA-256")
+            weight.inputStream().buffered().use { input ->
+                val buffer = ByteArray(1024 * 1024)
+                while (true) { val count = input.read(buffer); if (count < 0) break; digest.update(buffer, 0, count) }
+            }
+            require(digest.digest().joinToString("") { "%02x".format(it) } == entry["sha256"]) {
+                "Embedded model SHA-256 mismatch: ${entry["id"]}"
+            }
+        }
+    }
+}
+val copyAgentModelManifest by tasks.registering(Copy::class) {
+    from(modelManifest); into(layout.buildDirectory.dir("generated/agentAssets"))
+}
+android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/agentAssets"))
+tasks.named("preBuild") { dependsOn(verifyEmbeddedAgentModels, copyAgentModelManifest) }
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
 dependencies {
     implementation(project(":core"))

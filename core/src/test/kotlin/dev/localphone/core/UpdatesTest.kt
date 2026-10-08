@@ -36,6 +36,15 @@ class UpdatesTest {
         assertFails { GitHubUpdates.parseManifest(manifest().replace(hash, "cd".repeat(32)), assets, "dev.localphone.agent") }
         assertFails { GitHubUpdates.parseRelease(release().replace("\"size\":1234", "\"size\":9999999999"), repo) }
     }
+    @Test fun dualModelAssetPairSupportsLargeApksAndDoesNotAcceptHalfPublishedPairs() {
+        val dual = release().replace("update.json", GitHubUpdates.DUAL_MANIFEST_NAME)
+            .replace(GitHubUpdates.APK_NAME, GitHubUpdates.DUAL_APK_NAME).replace("\"size\":1234", "\"size\":1800000000")
+        val assets = GitHubUpdates.parseRelease(dual, repo)
+        assertEquals(1800000000, assets.apkBytes)
+        val largeManifest = manifest().replace(GitHubUpdates.APK_NAME, GitHubUpdates.DUAL_APK_NAME).replace("\"bytes\":1234", "\"bytes\":1800000000")
+        assertEquals(1800000000, GitHubUpdates.parseManifest(largeManifest, assets, "dev.localphone.agent").bytes)
+        assertFails { GitHubUpdates.parseRelease(dual.replace(GitHubUpdates.DUAL_MANIFEST_NAME, "unfinished.json"), repo) }
+    }
     @Test fun redirectAllowlistRejectsHostSpoofingAndCredentials() {
         assertTrue(GitHubUpdates.mayDownloadRedirect("https://release-assets.githubusercontent.com/path?signature=example"))
         for (url in listOf("http://github.com/path", "https://github.com.evil.test/path", "https://github.com@evil.test/file", "https://evil@github.com/file", "file:///update.apk", "https://github.com:8080/file"))

@@ -38,19 +38,27 @@ class AgentEngine(private val activity: Activity, private val graph: AgentApplic
         CommandSafety.blockedReason(utterance)?.let { reason ->
             onStage(EngineStage.POLICY_CHECK); return blocked(InvocationState.POLICY_BLOCKED, reason)
         }
-        var plan = BasicCommandPlanner().plan(utterance)
-        var interpretation = "DETERMINISTIC_GOAL_FAST_PATH"
+        var plan = ToolPlan(emptyList())
+        var modelError = ""
+        var interpretation = "RULE_BASED"
+        if (useModel) {
+            val prepared = graph.planner.prepare()
+            if (prepared.available) {
+                plan = graph.planner.plan(utterance)
+                if (plan.actions.isNotEmpty()) interpretation = "MODEL_INFERENCE:${graph.planner.selected.key}"
+                else modelError = graph.planner.lastError
+            } else modelError = prepared.error.orEmpty()
+        }
         if (plan.actions.isEmpty()) {
+            plan = BasicCommandPlanner().plan(utterance)
+            interpretation = "RULE_BASED" + if (modelError.isNotBlank()) "; selected=${graph.planner.selected.key}; $modelError" else ""
             if (plan.unsupportedReason?.let { it.startsWith("유효한 알람") || it.startsWith("타이머는") } == true) {
                 onStage(EngineStage.POLICY_CHECK); return blocked(InvocationState.LOW_CONFIDENCE, plan.unsupportedReason!!)
             }
             if (plan.unsupportedReason?.contains("오전인지 오후인지") == true) {
                 onStage(EngineStage.POLICY_CHECK); return blocked(InvocationState.AMBIGUOUS, plan.unsupportedReason!!)
             }
-            if (useModel && graph.planner.prepare().available) {
-                plan = graph.planner.plan(utterance); interpretation = "FUNCTIONGEMMA_GOAL"
-            }
-            if (plan.actions.isEmpty()) { plan = GoalRequests.fallback(utterance); interpretation = "ORIGINAL_GOAL_UI_FALLBACK" }
+            if (plan.actions.isEmpty()) { plan = GoalRequests.fallback(utterance); interpretation += "; ORIGINAL_GOAL_UI_FALLBACK" }
         }
         onStage(EngineStage.POLICY_CHECK)
         return preparePlan(plan).copy(interpretation = interpretation)
@@ -143,7 +151,7 @@ class AgentEngine(private val activity: Activity, private val graph: AgentApplic
                 AgentFailure(failure.state, failure.message), evidence)
         } finally {
             externalExecution = false
-            if (graph.modelFile.isFile) withContext(NonCancellable) { graph.planner.close() }
+            graph.planner.releaseAfterIdle()
         }
     }
     private suspend fun executeDeviceUi(action: Action.Device): UiGoalResult {

@@ -84,6 +84,11 @@ class VoiceInvocationActivity : ComponentActivity() {
     private fun beginWhenReady() {
         if (started || onboarding || isFinishing) return
         if (!ProfileScope(this).canAct()) { startCoordinator(); return }
+        if (graph.useAgentModel && graph.planner.selected == LocalModelId.FUNCTIONGEMMA && !graph.planner.gemmaTermsAccepted) {
+            started = true
+            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            closeEntry(); return
+        }
         if (!onboardingChecked) {
             onboardingChecked = true
             if (graph.settings.get("voice_onboarded") != "yes") {

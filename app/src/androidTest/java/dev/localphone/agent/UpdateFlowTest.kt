@@ -33,6 +33,7 @@ class UpdateFlowTest {
     private val badSigner get() = File(context.getExternalFilesDir("update-fixtures"), "untrusted.apk")
     private var scenario: ActivityScenario<MainActivity>? = null
     @Before fun ownedAvdOnly() {
+        graph.agentModelEnabledOverride = false
         assertEquals("1", device.executeShellCommand("getprop ro.kernel.qemu").trim())
         assertEquals("LocalPhoneAgent_API35", device.executeShellCommand("getprop ro.boot.qemu.avd_name").trim())
         assertTrue(BuildConfig.VERSION_CODE > 0)
@@ -43,6 +44,7 @@ class UpdateFlowTest {
         device.executeShellCommand("wm dismiss-keyguard")
     }
     @After fun restoreOwnedAvd() {
+        graph.agentModelEnabledOverride = null
         device.pressBack()
         scenario?.close(); graph.updateClientFactoryOverride = null
         // The host runner restores appops after instrumentation ends. Revoking this app-op while

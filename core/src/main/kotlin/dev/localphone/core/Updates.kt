@@ -16,7 +16,9 @@ data class AppUpdate(val versionCode: Long, val versionName: String, val minSdk:
 object GitHubUpdates {
     const val APK_NAME = "LocalPhoneAgent-automation.apk"
     const val MANIFEST_NAME = "update.json"
-    const val MAX_APK_BYTES = 512L * 1024 * 1024
+    const val DUAL_APK_NAME = "LocalPhoneAgent-dual-model.apk"
+    const val DUAL_MANIFEST_NAME = "update-dual.json"
+    const val MAX_APK_BYTES = 2L * 1024 * 1024 * 1024
     private fun JsonObject.string(name: String) = get(name)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
         ?: error("업데이트 정보의 $name 항목이 올바르지 않습니다.")
     private fun JsonObject.integer(name: String): Long {
@@ -42,12 +44,15 @@ object GitHubUpdates {
             require(item.string("state") == "uploaded" && item.string("browser_download_url") == base + name) { "다른 저장소의 업데이트 파일입니다." }
             return item
         }
-        val apk = asset(APK_NAME); val manifest = asset(MANIFEST_NAME)
+        val dual = assets.any { it.string("name") == DUAL_APK_NAME || it.string("name") == DUAL_MANIFEST_NAME }
+        val apkName = if (dual) DUAL_APK_NAME else APK_NAME
+        val manifestName = if (dual) DUAL_MANIFEST_NAME else MANIFEST_NAME
+        val apk = asset(apkName); val manifest = asset(manifestName)
         require(manifest.integer("size") in 1..32768 && apk.integer("size") in 1..MAX_APK_BYTES) { "업데이트 파일 크기가 올바르지 않습니다." }
         val digest = apk.get("digest")?.takeUnless { it.isJsonNull }?.asString
         require(digest == null || Regex("sha256:[a-fA-F0-9]{64}").matches(digest))
         return ReleaseAssets(tag, root.get("body")?.takeUnless { it.isJsonNull }?.asString.orEmpty().take(8000),
-            base + MANIFEST_NAME, base + APK_NAME, apk.integer("size"), digest?.substringAfter(':')?.lowercase())
+            base + manifestName, base + apkName, apk.integer("size"), digest?.substringAfter(':')?.lowercase())
     }
     fun parseManifest(json: String, release: ReleaseAssets, packageName: String): AppUpdate {
         require(json.length <= 32768)
@@ -57,7 +62,8 @@ object GitHubUpdates {
         require(code in 1..Int.MAX_VALUE && sdk in 26..100 && version == release.tag.removePrefix("v") + "-automation") { "업데이트 버전이 올바르지 않습니다." }
         val apk = root.getAsJsonObject("apk")
         val hash = apk.string("sha256").lowercase()
-        require(apk.string("name") == APK_NAME && apk.integer("bytes") == release.apkBytes && Regex("[a-f0-9]{64}").matches(hash)) { "APK 정보가 올바르지 않습니다." }
+        val expectedName = release.apkUrl.substringAfterLast('/')
+        require(expectedName in setOf(APK_NAME, DUAL_APK_NAME) && apk.string("name") == expectedName && apk.integer("bytes") == release.apkBytes && Regex("[a-f0-9]{64}").matches(hash)) { "APK 정보가 올바르지 않습니다." }
         require(release.apiDigest == null || release.apiDigest == hash) { "GitHub 파일 검사값이 일치하지 않습니다." }
         return AppUpdate(code, version, sdk.toInt(), release.apkUrl, release.apkBytes, hash, release.notes)
     }

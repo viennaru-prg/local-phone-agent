@@ -9,14 +9,28 @@ import dev.localphone.core.PolicyGate
 import java.io.File
 
 class AgentApplication : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        // A successfully installed update no longer needs its large installer cache; user data is retained.
+        File(cacheDir, "updates").listFiles()?.filter { file ->
+            Regex("[0-9]+-[a-f0-9]{12}\\.apk(?:\\.part)?").matches(file.name) &&
+                (file.name.substringBefore('-').toLongOrNull() ?: Long.MAX_VALUE) <= BuildConfig.VERSION_CODE
+        }?.forEach { it.delete() }
+    }
     private val cipher by lazy { LocalCipher() }
     val settings by lazy { SecureSettings(this, cipher) }
     val database by lazy { Room.databaseBuilder(this, PlacesDatabase::class.java, "user_places.db").build() }
     val places by lazy { RoomUserPlacesRepository(database.places(), cipher) }
     val resolver by lazy { PlaceResolver(places, NaverPlaceSearch(settings)) }
     val policy by lazy { PolicyGate(resolver) }
-    val modelFile get() = File(noBackupFilesDir, "functiongemma.litertlm")
-    val planner by lazy { FunctionGemmaPlanner(modelFile, File(noBackupFilesDir, "model_cache")) }
+    val embeddedModels by lazy { EmbeddedModelRepository(this) }
+    val modelFile get() = embeddedModels.extractedFile(LocalModelId.FUNCTIONGEMMA)
+    val planner by lazy { LocalAgentModels(embeddedModels, settings, File(noBackupFilesDir, "model_cache")) {
+        invocationArbiter.isActive || uiAutomation.active
+    } }
+    // Regression tests can explicitly exercise RULE_BASED; production always uses the selected embedded model.
+    internal var agentModelEnabledOverride: Boolean? = null
+    val useAgentModel get() = agentModelEnabledOverride ?: true
     val speechModel by lazy { SpeechModelRepository(this) }
     val invocationArbiter = InvocationArbiter()
     val invocationDebug by lazy { InvocationDebugStore(settings) }

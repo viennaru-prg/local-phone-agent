@@ -19,7 +19,7 @@ interface IntentPlanner { suspend fun plan(utterance: String): ToolPlan }
 
 object CommandSafety {
     private val waypoint = Regex("들렀|들러|경유|거쳐|갔다가|가고\\s*.*(?:가자|가줘)")
-    private val negation = Regex("하지\\s*마|가지\\s*마|가지마|틀지\\s*마|재생하지|취소|말고|안\\s*가|가면|갈까|가도|(?:가줘|가자|찍어|틀어|재생).*(?:라고|라는|하면|뜻|예시|설명|번역)")
+    private val negation = Regex("하지\\s*마|가지\\s*마|가지마|틀지\\s*마|재생하지|취소|말고|안\\s*가|가면(?!서)|갈까|가도|(?:가줘|가자|찍어|틀어|재생).*(?:라고|라는|하면|뜻|예시|설명|번역)")
     fun blockedReason(text: String): String? = when {
         text.length !in 1..1000 -> "명령 길이를 확인해 주세요."
         negation.containsMatchIn(text) -> "취소·조건·질문이 포함된 문장입니다. 실행할 명령을 분명하게 입력해 주세요."
@@ -31,7 +31,10 @@ object CommandSafety {
 
 /** Deterministic development mode. This class is explicitly not an LLM. */
 class BasicCommandPlanner : IntentPlanner {
-    override suspend fun plan(utterance: String): ToolPlan {
+    override suspend fun plan(utterance: String): ToolPlan = parse(utterance)
+    companion object {
+    /** Pure recognition is also used to detect missing parts of an explicit compound goal. */
+    fun parse(utterance: String): ToolPlan {
         val text = utterance.trim().trimEnd('.', '。', '!')
         CommandSafety.blockedReason(text)?.let { return ToolPlan(emptyList(), it) }
         if (CommandSafety.needsScreenGoal(text)) return GoalRequests.fallback(text)
@@ -39,7 +42,7 @@ class BasicCommandPlanner : IntentPlanner {
         val media = Regex("(?:노래|음악)\\s*(?:를\\s*)?(?:재생(?:해줘|해|해 줘)?|틀어(?:줘)?|켜(?:줘)?)|(?:미디어|음악)\\s*이어\\s*(?:재생|틀어)")
         val mediaFound = media.containsMatchIn(text)
         val remainder = media.replace(text, "").trim(' ', ',', '.', '!')
-        val navigation = Regex("^(.+?)\\s*(?:네비(?:게이션)?\\s*(?:찍(?:어줘|어 줘|어|고)|켜(?:줘)?|시작(?:해줘)?)|가자|가줘|가 줘|안내해줘|길\\s*안내해줘)\\s*$")
+        val navigation = Regex("^(.+?)\\s*(?:네비(?:게이션)?\\s*(?:찍(?:어줘|어 줘|어|고)|켜(?:줘)?|시작(?:해줘)?)|가자|가줘|가 줘|가면서|안내해줘|길\\s*안내해줘)\\s*$")
         val match = navigation.matchEntire(remainder)
         val actions = mutableListOf<Action>()
         match?.groupValues?.get(1)?.trim()?.let { destination ->
@@ -49,6 +52,7 @@ class BasicCommandPlanner : IntentPlanner {
         if (mediaFound && (match != null || remainder.isBlank())) actions += Action.MediaResume
         if (actions.isEmpty()) PhoneCommands.parse(text)?.let { return it }
         return if (actions.isEmpty()) ToolPlan(emptyList(), "명령을 확실히 이해하지 못했습니다. 기본 모드 예: 다음 곡 틀어 / 노래 멈춰 / 시계 앱 열어줘 / 오전 7시 알람 맞춰줘 / 집으로 가자") else ToolPlan(actions)
+    }
     }
 }
 

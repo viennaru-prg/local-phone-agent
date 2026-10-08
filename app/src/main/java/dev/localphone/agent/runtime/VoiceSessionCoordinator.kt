@@ -46,11 +46,11 @@ class VoiceSessionCoordinator(
     private var planText = ""
     private var policyText = ""
     private var executionText = ""
-    private var interpretation = "DETERMINISTIC_GOAL_FAST_PATH"
+    private var interpretation = "RULE_BASED"
     private var disposition = ResultDisposition.BACKGROUND_ACTION
     private var focusStatus = "NOT_REQUESTED"
     private var duplicates = 0
-    private val useModel = graph.settings.get("use_functiongemma") == "yes"
+    private val useModel = graph.useAgentModel
     private fun mark(name: String) { times.putIfAbsent(name, (SystemClock.elapsedRealtime() - invokedAt).coerceAtLeast(0)) }
     private fun markAt(name: String, elapsed: Long) { times.putIfAbsent(name, (elapsed - invokedAt).coerceAtLeast(0)) }
 
@@ -233,7 +233,7 @@ class VoiceSessionCoordinator(
             duplicateInvocations = duplicates, totalMs = SystemClock.elapsedRealtime() - invokedAt, speech = speechDiagnostic))
         graph.invocationArbiter.release(sessionId); ownsLease = false
         warming?.cancel(); work?.cancel()
-        if (useModel) scope.launch(NonCancellable) { graph.planner.close() } // No unmeasured permanent Agent cache.
+        if (useModel) { graph.planner.cancel(); graph.planner.releaseAfterIdle() }
         observer.onFinished(result)
     }
 }

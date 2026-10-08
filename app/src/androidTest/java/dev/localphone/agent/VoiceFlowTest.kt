@@ -45,6 +45,7 @@ class VoiceFlowTest {
         override fun cancel() { cancelled = true }
     }
     @Before fun before() {
+        graph.agentModelEnabledOverride = false
         dedicated = device.executeShellCommand("getprop ro.boot.qemu.avd_name").trim() == "LocalPhoneAgent_API35"
         Assume.assumeTrue("Only the task-owned AVD is allowed", dedicated)
         animationScale = device.executeShellCommand("settings get global animator_duration_scale").trim()
@@ -55,6 +56,7 @@ class VoiceFlowTest {
         Intents.init(); intentsReady = true
     }
     @After fun after() {
+        graph.agentModelEnabledOverride = null
         if (::activity.isInitialized) instrumentation.runOnMainSync {
             val button = activity.findViewById<VoiceButton>(R.id.voice_button)
             if (button?.phase in listOf(VoicePhase.LISTENING, VoicePhase.PREPARING)) button?.performClick()

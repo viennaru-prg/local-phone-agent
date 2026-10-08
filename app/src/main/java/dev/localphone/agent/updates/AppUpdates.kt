@@ -84,8 +84,10 @@ class AppUpdateClient(private val context: Context, private val transport: Relea
         val file = File(directory, "${update.versionCode}-${update.sha256.take(12)}.apk")
         val job = currentCoroutineContext().job
         try {
-            check(directory.usableSpace > update.bytes + 32 * 1024 * 1024) { "업데이트를 받을 저장 공간이 부족합니다." }
             directory.listFiles()?.filter { it.isFile && it != file && it.extension in listOf("part", "apk") }?.forEach { it.delete() }
+            if (file.isFile && runCatching { verifyArchive(file, update) }.isSuccess) return@withContext file
+            file.delete()
+            check(directory.usableSpace > update.bytes * 2 + 128L * 1024 * 1024) { "다운로드와 Android 설치 준비 공간이 부족합니다. 약 ${update.bytes * 2 / 1048576 + 128}MB 이상의 여유 공간이 필요합니다." }
             var lastPercent = -1
             transport.open(update.apkUrl).use { input ->
                 UpdateFiles.copyVerified(input, file, update.bytes, update.sha256, { job.ensureActive() }) { count ->

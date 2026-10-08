@@ -11,7 +11,7 @@ parser.add_argument('--version-code', type=int, required=True)
 parser.add_argument('--version', required=True)
 parser.add_argument('--output', type=Path, default=Path('update.json'))
 args = parser.parse_args()
-assert args.apk.name == 'LocalPhoneAgent-automation.apk'
+assert args.apk.name in {'LocalPhoneAgent-automation.apk', 'LocalPhoneAgent-dual-model.apk'}
 assert 0 < args.version_code < 2**31 and re.fullmatch(r'\d+\.\d+\.\d+', args.version)
 with args.apk.open('rb') as stream:
     sha = hashlib.file_digest(stream, 'sha256').hexdigest()

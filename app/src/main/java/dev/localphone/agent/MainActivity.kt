@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
     private val busy get() = activeJobs > 0
     private var commandText = ""
     private var pendingLocationName = ""
-    private var useModel = false
+    private val useModel get() = graph.useAgentModel
     private var showingSettings = false
     private var statusMessage = ""
     private var transcript = ""
@@ -62,6 +62,9 @@ class MainActivity : ComponentActivity() {
     private var updateStatus: TextView? = null
     private var updateNotes: TextView? = null
     private var preparingInstall = false
+    private var modelGroup: RadioGroup? = null
+    private val modelChoices = mutableMapOf<LocalModelId, RadioButton>()
+    private var renderingModels = false
     private val updateInstallPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         val ready = updater.state.value as? UpdateState.Ready
         if (ready != null && updater.client.canInstall()) installUpdate(ready)
@@ -78,15 +81,11 @@ class MainActivity : ComponentActivity() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) captureLocation(pendingLocationName)
         else tell("정확한 위치 권한이 필요합니다. 위치는 저장 확인을 누를 때만 기록됩니다.")
     }
-    private val modelPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) importModel(uri)
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         commandText = savedInstanceState?.getString("command").orEmpty()
-        useModel = savedInstanceState?.getBoolean("useModel") ?: (graph.settings.get("use_functiongemma") == "yes")
         showingSettings = savedInstanceState?.getBoolean("showingSettings") ?: intent.getBooleanExtra(EXTRA_SETTINGS, false)
         statusMessage = savedInstanceState?.getString("status").orEmpty()
         transcript = savedInstanceState?.getString("transcript").orEmpty()
@@ -100,9 +99,13 @@ class MainActivity : ComponentActivity() {
         })
         render()
         lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) { updater.state.collect { renderUpdateState(it) } }
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch { updater.state.collect { renderUpdateState(it) } }
+                launch { graph.planner.status.collect { renderModelState(it) } }
+            }
         }
         receiveShare(intent)
+        if (useModel && graph.planner.selected == LocalModelId.FUNCTIONGEMMA && !graph.planner.gemmaTermsAccepted) modelTerms()
         if (intent.getBooleanExtra("open_speech_evaluation", false)) {
             intent.removeExtra("open_speech_evaluation")
             startActivity(Intent(this, SpeechEvaluationActivity::class.java))
@@ -110,7 +113,6 @@ class MainActivity : ComponentActivity() {
     }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("command", if (showingSettings && ::input.isInitialized) input.text.toString() else commandText)
-        outState.putBoolean("useModel", useModel)
         outState.putString("locationName", pendingLocationName)
         outState.putBoolean("showingSettings", showingSettings)
         outState.putString("status", statusMessage)
@@ -244,28 +246,47 @@ class MainActivity : ComponentActivity() {
         })
         button("네이버 장소 검색 설정 (빠른 경로)") { searchSettings() }
         button(if (media.availableInThisBuild) "음악 제어 연결 (빠른 경로)" else "음악 직접 제어 안내") { configureMedia() }
-        button("FunctionGemma 모델 불러오기") { if (!busy) modelPicker.launch(arrayOf("*/*")) }
-        val toggle = Switch(this).apply {
-            id = R.id.use_functiongemma
-            text = "FunctionGemma 사용"; isChecked = useModel
-            setOnCheckedChangeListener { _, checked ->
-                if (checked && !graph.modelFile.exists()) {
-                    isChecked = false; tell("먼저 .litertlm 모델 파일을 불러와 주세요.")
-                } else { useModel = checked; graph.settings.put("use_functiongemma", if (checked) "yes" else "") }
+        addText("내장 AI 모델", 21, bold = true)
+        modelChoices.clear()
+        modelGroup = RadioGroup(this).also { group ->
+            LocalModelId.entries.forEach { id ->
+                val choice = RadioButton(this).apply { this.id = View.generateViewId() }
+                modelChoices[id] = choice; group.addView(choice)
+            }
+            body.addView(group)
+            group.setOnCheckedChangeListener { _, checked ->
+                if (!renderingModels && !busy) modelChoices.entries.firstOrNull { it.value.id == checked }?.key?.let(::chooseModel)
             }
         }
-        body.addView(toggle)
+        renderModelState(graph.planner.status.value)
+        button("선택 모델 준비 · 다시 시도") { chooseModel(graph.planner.selected) }
+        button("최근 모델 추론 확인") {
+            val planner = graph.planner
+            AlertDialog.Builder(this).setTitle("로컬 모델 실행 기록")
+                .setMessage("선택: ${planner.selected.key}\n현재 로드: ${planner.loadedId ?: "없음"}\n" +
+                    "준비: ${planner.lastLoad ?: "실행 전"}\n추론: ${planner.lastInferenceMs ?: "없음"} ms\n" +
+                    "추출·엔진·검사: ${planner.lastLoadTimings ?: "실행 전"}\n" +
+                    "오류: ${planner.lastError.ifBlank { "없음" }}\n\n최근 실제 모델 출력:\n" +
+                    (planner.lastResponse?.raw ?: "명령 추론 전") + "\n\n최근 준비 검사 출력:\n" +
+                    (planner.lastProbe?.raw ?: "준비 검사 전"))
+                .setPositiveButton("닫기", null).show()
+        }
+        button("모델 사용 약관 · 라이선스") { modelTerms() }
+        addText("두 모델 가중치가 APK에 포함되어 있습니다. 한 번에 하나만 로드하며, 작업이 끝난 뒤 30초 동안 사용하지 않으면 메모리를 해제합니다. 모델 전환 중에는 현재 선택을 유지하고 실제 추론 검사가 끝나야 변경됩니다.", 13)
         body.addView(Switch(this).apply {
             text = "Android 온디바이스 한국어 인식 사용 (기본)"
             isChecked = graph.settings.get("speech_engine") != "bundled"
             setOnCheckedChangeListener { _, checked -> graph.settings.put("speech_engine", if (checked) "native" else "bundled") }
         })
         button("음성 인식 상태·평가") { startActivity(Intent(this, SpeechEvaluationActivity::class.java)) }
-        addText("앱 실행·지도·직접 버튼 선택·검색은 모델 없이도 시도합니다. 복잡한 화면 목표는 불러온 로컬 모델로 해석합니다.", 13)
+        addText("선택한 AI가 명령을 해석하고 공식 연결·화면 작업으로 이어집니다. 모델 실패 시 규칙 기반 경로를 시도하며, 그 구분과 오류는 마지막 호출 기록에서 확인할 수 있습니다.", 13)
         addText("기본값은 Android 온디바이스 한국어 인식입니다. 기존 포함 모델은 직접 선택할 수 있습니다. 음성을 클라우드로 보내지 않으며 일반 음성 호출은 녹음 파일을 저장하지 않습니다.", 13)
     }
 
     private fun toggleVoice() {
+        if (useModel && graph.planner.selected == LocalModelId.FUNCTIONGEMMA && !graph.planner.gemmaTermsAccepted) {
+            modelTerms { toggleVoice() }; return
+        }
         if (voicePhase in listOf(VoicePhase.PREPARING, VoicePhase.LISTENING)) { cancelVoice(); return }
         if (busy || permissionPending) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -682,34 +703,60 @@ class MainActivity : ComponentActivity() {
             }.getOrDefault(controller.packageName) }.toTypedArray()) { _, index -> media.choose(sessions[index].packageName); tell("음악 앱을 연결했습니다.") }
             .setNegativeButton("취소", null).show()
     }
-    private fun importModel(uri: Uri) = launchSafe {
-        tell("모델 파일을 이 기기에 복사하고 있습니다…")
-        graph.planner.close()
-        withContext(Dispatchers.IO) {
-            val temp = java.io.File(graph.noBackupFilesDir, "model-import.tmp")
-            try {
-                contentResolver.openInputStream(uri).use { source ->
-                    requireNotNull(source)
-                    temp.outputStream().use { target ->
-                        val bytes = ByteArray(64 * 1024); var total = 0L
-                        while (true) { val count = source.read(bytes); if (count < 0) break
-                            total += count; require(total <= 1_073_741_824); target.write(bytes, 0, count) }
-                        require(total > 1_048_576)
-                    }
+    private fun renderModelState(states: Map<LocalModelId, ModelStatus>) {
+        renderingModels = true
+        try {
+            modelChoices.forEach { (id, view) ->
+                val value = states.getValue(id); val info = graph.embeddedModels.info(id)
+                val name = when (value.state) {
+                    ModelRuntimeState.INSTALLED -> "설치됨"
+                    ModelRuntimeState.LOADING -> "불러오는 중…"
+                    ModelRuntimeState.READY -> "준비됨"
+                    ModelRuntimeState.CURRENT -> "현재 사용 중"
+                    ModelRuntimeState.FAILED -> "실패"
                 }
-                java.nio.file.Files.move(temp.toPath(), graph.modelFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-            } finally { temp.delete() }
+                view.text = "${info.name} · $name${if (value.selected && value.state != ModelRuntimeState.CURRENT) " · 선택됨" else ""}\n${info.quantization} · ${info.bytes / 1048576}MB${if (value.error.isNotBlank()) "\n${value.error}" else ""}"
+                view.isChecked = value.selected
+                view.isEnabled = !busy && states.values.none { it.state == ModelRuntimeState.LOADING }
+            }
+        } finally { renderingModels = false }
+    }
+    private fun chooseModel(id: LocalModelId) {
+        if (id == LocalModelId.FUNCTIONGEMMA && !graph.planner.gemmaTermsAccepted) { modelTerms { chooseModel(id) }; return }
+        launchSafe {
+            renderModelState(graph.planner.status.value)
+            tell("${graph.embeddedModels.info(id).name} 준비와 실제 추론 검사 중…")
+            val result = graph.planner.select(id)
+            tell(result.message)
+            graph.planner.releaseAfterIdle()
+            renderModelState(graph.planner.status.value)
         }
-        tell("모델 파일을 불러왔습니다. FunctionGemma 사용을 켜고 명령을 테스트해 주세요.")
+    }
+    private fun modelTerms(accepted: (() -> Unit)? = null) {
+        val content = listOf("Gemma-Terms.txt", "Gemma-Prohibited-Use.txt", "Qwen-Apache-2.0.txt", "llama.cpp-MIT.txt").joinToString("\n\n") { filename ->
+            assets.open("licenses/$filename").bufferedReader().use { it.readText() }
+        }
+        val scroll = ScrollView(this).apply { addView(padded(label(
+            "이 앱의 Gemma 모델 사용에는 아래 Gemma 약관과 금지 사용 정책이 적용됩니다. 동의하면 사용 제한을 준수해야 합니다. Qwen과 실행 엔진의 라이선스도 포함되어 있습니다.\n\n$content", 13))) }
+        AlertDialog.Builder(this).setTitle("내장 모델 사용 약관").setView(scroll)
+            .setPositiveButton(if (graph.planner.gemmaTermsAccepted) "닫기" else "동의하고 사용") { _, _ ->
+                graph.planner.acceptGemmaTerms(); accepted?.invoke()
+            }.setNegativeButton("취소", null).show()
     }
 
     private fun launchSafe(command: Boolean = false, block: suspend () -> Unit) {
         lifecycleScope.launch {
+            val commandLease = if (command) UUID.randomUUID().toString() else null
+            if (commandLease != null && !graph.invocationArbiter.acquire(commandLease)) { tell("다른 음성 작업이 진행 중입니다."); return@launch }
             activeJobs++
             if (command) setVoicePhase(VoicePhase.PROCESSING)
             try { block() } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             catch (_: Exception) { tell("작업을 완료하지 못했습니다. 입력과 기기 설정을 확인해 주세요.") }
-            finally { activeJobs--; if (command) setVoicePhase(VoicePhase.IDLE) }
+            finally {
+                commandLease?.let(graph.invocationArbiter::release)
+                activeJobs--; if (command) setVoicePhase(VoicePhase.IDLE)
+                renderModelState(graph.planner.status.value)
+            }
         }
     }
     private fun tell(message: String) {

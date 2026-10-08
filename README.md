@@ -1,6 +1,12 @@
-# Local Phone Agent 0.6.0 — 한국어 온디바이스 음성 입력
+# Local Phone Agent 0.7.0 — 두 개의 내장 로컬 AI
 
-현재 수정판은 **LocalPhoneAgent-automation.apk**입니다. UserPlaces, 앱별 설정과 등록된 Tool은 빠른 실행 경로입니다. 없어도 원래 명령을 유지하고, Android API·Intent·Deep Link가 해결하지 못한 부분은 사용자가 연결한 AccessibilityService로 실제 앱 화면에서 이어갑니다. 내비와 음악은 예시이며 제품의 전체 범위를 제한하지 않습니다.
+직접 설치 파일은 **LocalPhoneAgent-dual-model.apk**입니다. FunctionGemma 270M CPU INT8와 Qwen3 1.7B Q4_K_M의 실제 가중치를 모두 포함합니다. 첫 실행에 다운로드하거나 파일을 고를 필요가 없습니다. UserPlaces, 앱별 설정과 등록된 Tool은 빠른 실행 경로입니다. 없어도 원래 명령을 유지하고, Android API·Intent·Deep Link가 해결하지 못한 부분은 사용자가 연결한 AccessibilityService로 실제 앱 화면에서 이어갑니다. 내비와 음악은 예시이며 제품의 전체 범위를 제한하지 않습니다.
+
+## 로컬 AI 선택
+
+설정 → **로컬 AI 모델**에서 기본 FunctionGemma와 Qwen을 선택합니다. FunctionGemma의 이용 약관을 앱에서 확인한 뒤 사용할 수 있습니다. 기존 모델을 내리고 새 모델을 로드하여 실제 도구 추론을 검사한 뒤 선택을 저장합니다. 작업 중에는 전환을 보류하고, 초기화 실패 시 이전 모델 복구를 시도하며 오류를 표시합니다. 두 모델을 동시에 RAM에 유지하지 않으며 작업 종료 뒤 30초간 사용하지 않으면 내립니다. 마지막 선택은 앱 재실행 후 유지됩니다.
+
+FunctionGemma는 LiteRT-LM 0.10.2, Qwen은 고정 리비전의 llama.cpp JNI를 사용합니다. 둘 다 CPU 4개 스레드를 사용하며 동일한 Tool Catalog·Policy Gate·Android 실행기를 통과합니다. STT 엔진은 모델 선택과 별개입니다. 명령은 선택된 모델이 먼저 해석하고, 모델 실패 시 기존 규칙 경로는 `RULE_BASED`로 기록합니다. 실제 추론은 `MODEL_INFERENCE:<모델 ID>`로 기록하고 모델 출력·시간과 STT 원문을 분리합니다. 범용 화면 조작 품질이나 한국어 정확도를 모델 크기만으로 보장하지 않습니다.
 
 ## 달라진 동작
 
@@ -17,7 +23,7 @@
 
 ## 설치와 시작
 
-1. `LocalPhoneAgent-automation.apk` 하나를 설치합니다. instrumentation APK와 지도 테스트 fixture는 사용자 휴대폰에 설치하지 않습니다.
+1. `LocalPhoneAgent-dual-model.apk` 하나를 설치합니다. instrumentation APK와 지도 테스트 fixture는 사용자 휴대폰에 설치하지 않습니다.
 2. 첫 실행에서 마이크를 허용합니다. 기본 launcher는 짧은 음성 호출 창에서 자동으로 듣습니다. 작은 설정 버튼으로 여는 수동 홈에는 가운데 마이크와 인식 애니메이션만 둡니다.
 3. 화면 작업이 필요하면 설정의 **화면 작업 연결**에서 설명에 동의한 뒤 Android 접근성 설정에서 **Local Phone Agent 화면 작업** 서비스를 한 번 직접 켭니다. Android에서 ‘앱의 액세스가 거부됨’이 나오면 앱 정보 → ⋮ → 제한된 설정 허용을 직접 완료하고 접근성에서 다시 켭니다. 앱이 접근성을 스스로 허용하지 않습니다. 장소·네이버 검색 API·앱별 Tool 설정은 필요하지 않습니다.
 4. 대상 앱의 로그인과 위치 권한 등은 그 앱에서 준비합니다. 실행 중 화면 작업 창의 **작업 취소**로 멈출 수 있습니다.
@@ -37,7 +43,7 @@ APK 크기·SHA-256·패키지·버전·현재 앱과 같은 서명을 검사합
 
 설정의 **음성 인식 상태·평가**는 선택 기능입니다. 지원 조회는 마이크를 켜지 않습니다. 비교 기록은 별도 동의 뒤 휴대폰 내부에만 저장하고, 원음 파일 저장 체크는 기본 해제입니다. 평가 중 명령은 실행하지 않습니다. 사용자의 요청에 따라 이번 배포에서는 50개 자연 발화·차량 평가를 진행하지 않았습니다. 정확도 향상률과 실제 S25 비행기 모드 인식 성공은 미측정입니다. 감사와 23개 결과 항목은 [음성 입력 결과](docs/stt-results.md)에 기록합니다.
 
-등록된 함수에 맞는 명령은 빠른 경로로 처리합니다. 함수가 맞지 않는 명령은 `perform_app_task(app_name, goal)`로 원래 목표를 유지합니다. 직접 버튼 선택·검색·네이버 내비의 의미 기반 UI 경로는 모델 없이 시도합니다. 다른 복잡한 목표는 가져온 로컬 FunctionGemma 모델에 현재 화면을 제공해 다음 동작을 반복 계획하는 경로가 있습니다. **해당 모델의 가중치는 포함되어 있지 않고 실제 FunctionGemma 추론은 미검증입니다.** 모델이 없다고 이미 가능한 앱 실행·검색·화면 조작을 먼저 막지는 않습니다. 모든 앱·복잡한 명령을 현재 완성했다고 주장하지 않습니다.
+등록된 함수에 맞는 명령은 빠른 실행 경로로 처리합니다. 함수가 맞지 않는 명령은 `perform_app_task(app_name, goal)`로 원래 목표를 유지합니다. 직접 버튼 선택·검색·네이버 내비의 의미 기반 UI 경로도 유지합니다. 다른 복잡한 목표는 선택된 내장 모델에 현재 화면을 제공해 다음 동작을 반복 계획합니다. 관측·도구 선택·실행 실패를 구분하고, 모델의 완료 선언만으로 성공 처리하지 않습니다. 기존 APK의 가중치 부재 감사와 새 구조는 [듀얼 모델 감사](docs/dual-model-audit.md), 실제 검사 결과는 [모델 검증 결과](docs/dual-model-results.md)에 기록합니다.
 
 네이버 공개 검색 API 키는 선택 사항이며, 없으면 네이버지도 자체 검색을 사용합니다. 설정한 REST 검색에는 공개 장소 검색어가 전송됩니다. 네이버지도 등 대상 앱의 자체 통신은 그 앱이 담당합니다.
 
@@ -45,16 +51,21 @@ APK 크기·SHA-256·패키지·버전·현재 앱과 같은 서명을 검사합
 
 ## 빌드와 검증
 
-JDK 21, Android SDK 35, Gradle 8.11.1이 필요합니다. SDK 경로는 로컬 `local.properties` 또는 ANDROID_HOME으로 지정합니다.
+JDK 21, Android SDK 35, Gradle 8.11.1, NDK 28.2.13676358, CMake 3.22.1이 필요합니다. SDK 경로는 로컬 `local.properties` 또는 ANDROID_HOME으로 지정합니다. FunctionGemma 모바일 액션 모델의 공식 이용 약관 동의와 Hugging Face 접근 권한이 필요합니다. 토큰은 APK·Git·로그에 저장하지 않습니다.
 
 ```powershell
+git submodule update --init --recursive
 python scripts/prepare-assets.py
+hf auth login
+python scripts/prepare-agent-models.py
 ./gradlew.bat :core:test :app:assembleAutomation :app:lintAutomation
 ./gradlew.bat :app:assembleAutomationAndroidTest -PtestBuildType=automation
 ```
 
 전체 개발판 검사: `:app:assembleDebug :app:assembleDebugAndroidTest`로 빌드합니다. `testBuildType`별 instrumentation task는 서로 다른 Gradle 호출에서 빌드합니다. 과거 제한판 `install`은 화면 작업과 알림 listener를 제외하며, 이 요청에 사용하는 build type은 `automation`입니다.
 
-Android 15 전용 AVD에서 실제 OS 접근성 서비스가 별도의 테스트 앱을 조작하도록 검사합니다. NAVER 패키지/URI를 흉내 내는 fixture는 **실제 네이버지도 앱이 아닙니다**. fixture는 testOnly이고 자동 검사는 소유한 AVD만 사용합니다. 실제 S25 일반 영역에서 0.5.0 USB 설치·사용자 접근성 활성화와 네이버의 집/회사·자주 가는 곳 탭 구조를 확인했습니다. 이번 자동 회귀 검사와 실제 네이버 안내 시작·Knox·RegiStar·차량/Bluetooth·파일 설치의 Play 프로텍트 승인은 구분합니다. 0.6.0의 최종 설치 APK와 결과는 Release의 `update-verification.json` 및 로컬 `automation-test/stt-shipping.json`에 기록합니다. 이전 0.5.1은 코어 82개·Android 49개를 통과했고 `history/0.5.1`에 보존합니다. 과거 검사 수와 중복 합산하지 않습니다.
+모델 가중치는 100 MiB를 넘으므로 일반 Git에는 포함하지 않습니다. 설치 APK에는 두 가중치가 반드시 존재해야 하며 누락·크기·SHA-256 오류 시 빌드가 실패합니다. 오프라인 소스 ZIP에는 실제 가중치와 고정 native 소스를 포함합니다. CI는 항상 core 검사를 하고, 공식 모델에 접근할 수 있는 `HF_TOKEN` secret이 설정된 경우에만 전체 APK·lint를 검사합니다. CI의 임시 debug 서명으로 배포하지 않습니다.
+
+Android 15 전용 AVD에서 실제 OS 접근성 서비스가 별도의 테스트 앱을 조작하도록 검사합니다. NAVER 패키지/URI를 흉내 내는 fixture는 **실제 네이버지도 앱이 아닙니다**. fixture는 testOnly이고 자동 검사는 소유한 AVD만 사용합니다. 실제 S25 일반 영역에서 이전 0.5.0 설치·접근성 활성화와 네이버의 집/회사·자주 가는 곳 구조를 확인했습니다. 0.7.0 모델의 S25 실행·발열·배터리·Knox·RegiStar·차량 및 Play 프로텍트 설치 승인은 별도 미검증입니다. 최종 설치 APK의 해시·검사 범위는 Release의 `update-verification.json`에 기록합니다. 과거 검사 수와 중복 합산하지 않습니다.
 
 세부 설계는 [ARCHITECTURE.md](ARCHITECTURE.md), 사용·검증 안내는 [docs/goal-ui-fallback.txt](docs/goal-ui-fallback.txt)에 있습니다. `model-contract`의 예시는 계약용 샘플이며 실제 모델 학습·성능 검증 자료가 아닙니다.

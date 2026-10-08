@@ -31,6 +31,7 @@ class InvocationDebugStore(private val settings: SecureSettings) {
 
 class InvocationArbiter {
     private var active: String? = null
+    val isActive get() = synchronized(this) { active != null }
     @Synchronized fun acquire(id: String): Boolean { if (active != null) return false; active = id; return true }
     @Synchronized fun release(id: String) { if (active == id) active = null }
 }

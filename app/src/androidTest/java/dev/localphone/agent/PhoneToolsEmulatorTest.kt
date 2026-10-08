@@ -36,6 +36,7 @@ class PhoneToolsEmulatorTest {
     private var intentsReady = false
 
     @Before fun before() {
+        graph.agentModelEnabledOverride = false
         dedicated = device.executeShellCommand("getprop ro.boot.qemu.avd_name").trim() == "LocalPhoneAgent_API35"
         Assume.assumeTrue("Only the task-owned LocalPhoneAgent_API35 AVD is allowed", dedicated)
         assertTrue(device.executeShellCommand("pm clear $clock").contains("Success"))
@@ -48,6 +49,7 @@ class PhoneToolsEmulatorTest {
         await { onView(withText("미리 등록하지 않아도 지도 앱의 저장 장소와 검색 화면에서 찾습니다.")).check(matches(isDisplayed())) }
     }
     @After fun after() {
+        graph.agentModelEnabledOverride = null
         scenario?.close()
         if (intentsReady) Intents.release()
         if (dedicated) device.executeShellCommand("pm clear $clock") // Remove only the synthetic alarms/timers we created.

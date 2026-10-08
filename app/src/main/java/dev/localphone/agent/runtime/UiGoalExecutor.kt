@@ -43,7 +43,7 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
             // App-specific labels are accelerators too. Continue on the observed UI with the local
             // planner when those labels do not match; it cannot guess a private destination identity.
             suspend fun assist(screen: UiScreen, identityResolved: Boolean): Boolean {
-                val proposal = graph.planner.nextUi(uiGoal, screen, history.takeLast(6))
+                val proposal = if (graph.useAgentModel) graph.planner.nextUi(uiGoal, screen, history.takeLast(6)) else UiProposal.Unavailable
                 val command = (proposal as? UiProposal.Act)?.command ?: return false
                 val node = when (command) {
                     is UiCommand.Click -> screen.node(command.token)
@@ -320,7 +320,7 @@ class GenericUiGoal(private val graph: AgentApplication) {
                 val search = screen.exact("검색", "Search").map(screen::clickTarget).firstOrNull()
                 if (search != null && act(screen, UiCommand.Click(search.token))) return@repeat
             }
-            when (val proposal = graph.planner.nextUi(goal, screen, history.takeLast(6))) {
+            when (val proposal = if (graph.useAgentModel) graph.planner.nextUi(goal, screen, history.takeLast(6)) else UiProposal.Unavailable) {
                 is UiProposal.Act -> if (act(screen, proposal.command)) { history += proposal.command.toString(); idle = 0; return@repeat }
                 is UiProposal.Ambiguous -> {
                     val nodes = proposal.tokens.mapNotNull(screen::node)
@@ -335,9 +335,9 @@ class GenericUiGoal(private val graph: AgentApplication) {
                 }
                 UiProposal.Unavailable -> Unit
             }
-            if (++idle >= 4) throw UiUnavailable(if (!graph.modelFile.isFile) InvocationState.MODEL_UNAVAILABLE else InvocationState.LOW_CONFIDENCE,
+            if (++idle >= 4) throw UiUnavailable(if (!graph.useAgentModel || !graph.planner.available) InvocationState.MODEL_UNAVAILABLE else InvocationState.LOW_CONFIDENCE,
                 "앱 화면의 자동 해결 경로에서 작업을 완료하지 못했습니다." +
-                    if (!graph.modelFile.isFile) " 직접 버튼 선택·검색 외의 복잡한 목표 해석에는 로컬 모델이 필요합니다." else " 실제 화면의 작업 대상을 더 구체적으로 알려주세요.")
+                    if (graph.planner.lastError.isNotBlank()) " ${graph.planner.lastError}" else " 실제 화면의 작업 대상을 더 구체적으로 알려주세요.")
             delay(300)
         }
         throw UiUnavailable(InvocationState.EXECUTION_FAILED, "화면 작업 완료를 확인하지 못했습니다.")

@@ -3,6 +3,9 @@
 **/build/
 local.properties
 *.litertlm
+*.gguf
+.cxx/
+**/.cxx/
 *.keystore
 *.jks
 .idea/

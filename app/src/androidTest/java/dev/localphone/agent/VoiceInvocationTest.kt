@@ -55,6 +55,7 @@ class VoiceInvocationTest {
         override fun cancel() { cancelled = true }
     }
     @Before fun before() {
+        graph.agentModelEnabledOverride = false
         Assume.assumeTrue("Only task-owned AVD", device.executeShellCommand("getprop ro.boot.qemu.avd_name").trim() == "LocalPhoneAgent_API35")
         device.wakeUp(); device.executeShellCommand("wm dismiss-keyguard")
         device.executeShellCommand("pm grant ${context.packageName} ${Manifest.permission.RECORD_AUDIO}")
@@ -69,6 +70,7 @@ class VoiceInvocationTest {
         Intents.init()
     }
     @After fun after() {
+        graph.agentModelEnabledOverride = null
         instrumentation.runOnMainSync { entry?.coordinator?.cancel(); entry?.finishAndRemoveTask() }
         session?.release(); graph.speechFactoryOverride = null; graph.focusFactoryOverride = null
         graph.settings.put("use_functiongemma", ""); graph.settings.put("voice_haptics", "")
@@ -233,14 +235,13 @@ class VoiceInvocationTest {
         await { assertEquals(NaverLinks.PACKAGE, device.currentPackageName) }
         assertEquals("수원역점", graph.invocationDebug.last?.clarification)
     }
-    @Test fun missingAgentModelDoesNotBlockAnAvailableStructuredMediaFastPath() {
-        Assume.assumeFalse(graph.modelFile.exists())
-        graph.settings.put("use_functiongemma", "yes")
+    @Test fun explicitRuleModeKeepsAvailableStructuredMediaFastPath() {
+        assertFalse(graph.useAgentModel)
         media()
         openMap(); launch(); feed { it.onFinal("다음 곡") }
         result(InvocationState.SUCCESS)
         await { assertEquals(1, skips.get()) }
-        assertEquals("DETERMINISTIC_GOAL_FAST_PATH", graph.invocationDebug.last?.interpretation)
+        assertEquals("RULE_BASED", graph.invocationDebug.last?.interpretation)
     }
     @Test fun focusDenialStopsBeforeMicrophoneStarts() {
         graph.focusFactoryOverride = { object : CaptureFocus {

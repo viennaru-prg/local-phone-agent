@@ -1,4 +1,4 @@
-# Local Phone Agent 0.7.2 — 뒷면 음성·안내 완료 수정
+# Local Phone Agent 0.7.3 — 중앙·자동 음성 호출 상세 비교 기록
 
 직접 설치 파일은 **LocalPhoneAgent-dual-model.apk**입니다. FunctionGemma 270M CPU INT8와 Qwen3 1.7B Q4_K_M의 실제 가중치를 모두 포함합니다. 첫 실행에 다운로드하거나 파일을 고를 필요가 없습니다. UserPlaces, 앱별 설정과 등록된 Tool은 빠른 실행 경로입니다. 없어도 원래 명령을 유지하고, Android API·Intent·Deep Link가 해결하지 못한 부분은 사용자가 연결한 AccessibilityService로 실제 앱 화면에서 이어갑니다. 내비와 음악은 예시이며 제품의 전체 범위를 제한하지 않습니다.
 
@@ -10,6 +10,7 @@ FunctionGemma는 LiteRT-LM 0.10.2, Qwen은 고정 리비전의 llama.cpp JNI를 
 
 ## 달라진 동작
 
+- 설정 → **음성 호출 기록 · 비교 → 비교 기록 시작**으로 중앙/자동 호출의 ASR 원본·점수·bias·callback 순서·상태·판정·모델 입력/출력·실행 결과를 같은 형식으로 기록합니다. 실패·재질문·취소를 포함해 최근 최대 30건을 암호화해 보관하고, 같은 명령의 두 호출을 비교·복사하거나 JSON으로 저장합니다. [상세 기록 안내](docs/voice-diagnostics.md)를 참고하세요.
 - native STT가 정확한 길안내 문장에 0점을 반환해 Qwen 전에 거절되던 경로를 수정했습니다. 최종/중간 문장의 일관성과 실제 목적지 충돌 여부를 확인하며 0점은 그대로 기록합니다. 실제 충돌·민감한 명령은 이 예외로 넘기지 않습니다.
 - 기존 등록 장소를 안내 후 slot 캐시에 중복 생성하지 않습니다. 안내 시작 클릭이 수락돼도 화면이 바뀌지 않으면 새 화면에서 한 번 실제 tap을 시도하고, 목적지가 숨겨진 주행 화면도 검증된 경로와 실제 안내 상태로 완료합니다.
 - 중앙 마이크·텍스트·자동 음성 호출 모두 현재 설치 공간에서 선택한 AI를 사용합니다. 자동 호출에서 최종 음성을 받아 명령을 해석하는 중 다른 화면이 잠깐 덮어도 작업을 이어갑니다. 호출 창에도 선택 AI를 표시하고, 설정의 **자동 음성 호출 테스트**로 같은 진입점을 실행할 수 있습니다.
@@ -72,6 +73,6 @@ python scripts/prepare-agent-models.py
 
 모델 가중치는 100 MiB를 넘으므로 일반 Git에는 포함하지 않습니다. 설치 APK에는 두 가중치가 반드시 존재해야 하며 누락·크기·SHA-256 오류 시 빌드가 실패합니다. 오프라인 소스 ZIP에는 실제 가중치와 고정 native 소스를 포함합니다. CI는 항상 core 검사를 하고, 공식 모델에 접근할 수 있는 `HF_TOKEN` secret이 설정된 경우에만 전체 APK·lint를 검사합니다. CI의 임시 debug 서명으로 배포하지 않습니다.
 
-Android 15 전용 AVD에서 실제 OS 접근성 서비스가 별도의 테스트 앱을 조작하도록 검사합니다. NAVER 패키지/URI를 흉내 내는 fixture는 **실제 네이버지도 앱이 아닙니다**. fixture는 testOnly이고 자동 검사는 소유한 AVD만 사용합니다. 실제 S25 일반 영역에서 이전 0.5.0 설치·접근성 활성화와 네이버의 집/회사·자주 가는 곳 구조를 확인했습니다. 0.7.2를 연결된 S25에서 재검증하지 못했습니다. 사용자가 제공한 0.7.1 native STT 실패 진단은 원인 분석 근거이며 새 APK의 S25 실행·발열·배터리·Knox·RegiStar·차량·Play 프로텍트 승인은 미검증입니다. 최종 설치 APK의 해시·검사 범위는 Release의 `update-verification.json`에 기록합니다. 과거 검사 수와 중복 합산하지 않습니다.
+Android 15 전용 AVD에서 실제 OS 접근성 서비스가 별도의 테스트 앱을 조작하도록 검사합니다. NAVER 패키지/URI를 흉내 내는 fixture는 **실제 네이버지도 앱이 아닙니다**. fixture는 testOnly이고 자동 검사는 소유한 AVD만 사용합니다. 실제 S25 일반 영역에서 이전 0.5.0 설치·접근성 활성화와 네이버의 집/회사·자주 가는 곳 구조를 확인했습니다. 0.7.3을 연결된 S25에서 재검증하지 못했습니다. 사용자가 제공한 0.7.1 native STT 실패 진단은 원인 분석 근거이며 새 APK의 S25 실행·발열·배터리·Knox·RegiStar·차량·Play 프로텍트 승인은 미검증입니다. 최종 설치 APK의 해시·검사 범위는 Release의 `update-verification.json`에 기록합니다. 과거 검사 수와 중복 합산하지 않습니다.
 
 세부 설계는 [ARCHITECTURE.md](ARCHITECTURE.md), 사용·검증 안내는 [docs/goal-ui-fallback.txt](docs/goal-ui-fallback.txt)에 있습니다. `model-contract`의 예시는 계약용 샘플이며 실제 모델 학습·성능 검증 자료가 아닙니다.

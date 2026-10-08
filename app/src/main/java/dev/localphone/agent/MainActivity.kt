@@ -35,7 +35,9 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
     companion object { const val EXTRA_SETTINGS = "open_settings" }
     private val graph get() = application as AgentApplication
-    private val engine by lazy { AgentEngine(this, graph) }
+    private val engineDelegate = lazy { AgentEngine(this, graph) }
+    private val engine by engineDelegate
+    private val diagnosticAudit get() = if (engineDelegate.isInitialized()) engine.audit else null
     private val navigation get() = engine.navigation
     private val media get() = engine.media
     private lateinit var body: LinearLayout
@@ -56,6 +58,8 @@ class MainActivity : ComponentActivity() {
     private var voiceWarming: kotlinx.coroutines.Job? = null
     private var voiceStartedAt = 0L
     private var voiceMetrics: SpeechMetrics? = null
+    private var voiceAudit: InvocationDiagnostics? = null
+    private var commandPreviousResponse: ModelResponse? = null
     private val voiceTimes = linkedMapOf<String, Long>()
     private var captureFocus: CaptureFocus? = null
     private var permissionPending = false
@@ -126,10 +130,19 @@ class MainActivity : ComponentActivity() {
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); receiveShare(intent) }
     override fun onStop() {
-        if (voicePhase in listOf(VoicePhase.PREPARING, VoicePhase.LISTENING)) cancelVoice(silent = true)
+        diagnosticAudit?.hostState("STOP", voicePhase.name)
+        if (voicePhase in listOf(VoicePhase.PREPARING, VoicePhase.LISTENING)) cancelVoice(silent = true, reason = "HOST_STOP")
         super.onStop()
     }
-    override fun onDestroy() { voiceGeneration++; speech?.close(); speech = null; super.onDestroy() }
+    override fun onResume() { super.onResume(); diagnosticAudit?.hostState("RESUME", voicePhase.name) }
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus); diagnosticAudit?.hostState(if (hasFocus) "FOCUS_GAINED" else "FOCUS_LOST", voicePhase.name)
+    }
+    override fun onDestroy() {
+        diagnosticAudit?.hostState("DESTROY", voicePhase.name)
+        voiceAudit?.takeUnless { it.closed }?.finish("CANCELLED", "HOST_DESTROY")
+        voiceGeneration++; speech?.close(); speech = null; super.onDestroy()
+    }
 
     private fun render() {
         voiceButton = null; voiceHeading = null; voiceTranscript = null
@@ -248,7 +261,7 @@ class MainActivity : ComponentActivity() {
                 startActivity(Intent(this, VoiceInvocationActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
         }
-        button("마지막 음성 호출 기록") { startActivity(Intent(this, InvocationDebugActivity::class.java)) }
+        button("음성 호출 기록 · 비교") { startActivity(Intent(this, InvocationDebugActivity::class.java)) }
         button("음성 호출 설정") { invocationSettings() }
         button("화면 작업 연결") { configureAccessibility() }
         body.addView(Switch(this).apply {
@@ -374,23 +387,34 @@ class MainActivity : ComponentActivity() {
         } }; dialog.show()
     }
     private fun startVoice() {
+        voiceAudit?.takeUnless { it.closed }?.finish("CANCELLED", "SUPERSEDED_BY_NEW_MANUAL_CAPTURE")
         val generation = ++voiceGeneration
         voiceStartedAt = SystemClock.elapsedRealtime(); voiceMetrics = null
+        voiceAudit = engine.beginDiagnostics("MANUAL_MICROPHONE", voiceStartedAt, UUID.randomUUID().toString())
+        val audit = checkNotNull(voiceAudit)
         voiceWarming?.cancel(); voiceWarming = null
         voiceTimes.clear(); voiceTimes["T0"] = 0; voiceTimes["T1"] = 0
         speech?.close()
         transcript = ""; statusMessage = ""
         setVoicePhase(VoicePhase.PREPARING)
         voicePreparation = lifecycleScope.launch {
-            val context = try { engine.speechContext() } catch (_: Exception) {
+            val context = try { engine.speechContext() } catch (failure: Exception) {
+                audit.event("CONTEXT_ERROR", mapOf("class" to failure.javaClass.name, "message" to failure.message))
+                audit.finish("STT_FAILED", "음성 입력을 준비하지 못했습니다.")
                 if (generation == voiceGeneration) { setVoicePhase(VoicePhase.IDLE); tell("음성 입력을 준비하지 못했습니다.") }; return@launch
             }
-            if (generation != voiceGeneration || !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@launch
+            if (generation != voiceGeneration || !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                audit.finish("CANCELLED", "CAPTURE_HOST_NO_LONGER_READY"); return@launch
+            }
             val focus = graph.createCaptureFocus(); captureFocus = focus
-            if (!focus.acquire { cancelVoice(silent = true) }) { setVoicePhase(VoicePhase.IDLE); tell("음성 입력을 위한 오디오 사용 권한을 얻지 못했습니다."); return@launch }
+            if (!focus.acquire { cancelVoice(silent = true, reason = "AUDIO_FOCUS_LOST") }) {
+                audit.event("AUDIO_FOCUS", mapOf("acquired" to false)); audit.finish("EXECUTION_FAILED", "AUDIO_FOCUS_DENIED")
+                setVoicePhase(VoicePhase.IDLE); tell("음성 입력을 위한 오디오 사용 권한을 얻지 못했습니다."); return@launch
+            }
+            audit.event("AUDIO_FOCUS", mapOf("acquired" to true, "mode" to focus.modeName))
             if (graph.speechFactoryOverride == null) kotlinx.coroutines.delay(150)
             if (generation != voiceGeneration) { focus.release(); return@launch }
-        speech = graph.createSpeechInput(context).also { source -> source.start(object : SpeechInput.Listener {
+        speech = graph.createSpeechInput(context).also { source -> source.startAudited(object : SpeechInput.Listener {
             private fun current() = generation == voiceGeneration && voicePhase in listOf(VoicePhase.PREPARING, VoicePhase.LISTENING)
             override fun onListening() { if (current()) {
                 voiceTimes["T2"] = SystemClock.elapsedRealtime() - voiceStartedAt
@@ -413,19 +437,28 @@ class MainActivity : ComponentActivity() {
                 voiceTimes["T5"] = SystemClock.elapsedRealtime() - voiceStartedAt
                 voiceGeneration++; source.cancel(); focus.release()
                 val resolved = graph.speechDiagnostics.resolve(result, context)
+                audit.speech = graph.speechDiagnostics.last
+                audit.event("RESOLVER_OUTPUT", audit.speech); audit.checkpoint()
                 val command = resolved.selectedText.trim().trimEnd('.', '。', '!')
-                if (command.isBlank()) { setVoicePhase(VoicePhase.IDLE); tell("잘 듣지 못했어요. 다시 눌러 말해주세요."); return }
+                if (command.isBlank()) { audit.finish("NO_SPEECH"); setVoicePhase(VoicePhase.IDLE); tell("잘 듣지 못했어요. 다시 눌러 말해주세요."); return }
                 transcript = command; commandText = command
                 setVoicePhase(VoicePhase.IDLE)
                 if (resolved.requiresClarification) {
                     val choices = resolved.candidates.take(3).distinctBy { it.semanticKey }
                     tell(resolved.clarification)
+                    audit.event("SCREEN_CLARIFICATION_REQUESTED", resolved.clarification); audit.checkpoint()
+                    var accepted = false
                     if (choices.isNotEmpty()) AlertDialog.Builder(this@MainActivity).setTitle("어느 명령인가요?")
                         .setItems(choices.map { it.text }.toTypedArray()) { _, index ->
+                            accepted = true; audit.event("SCREEN_TRANSCRIPT_CHOICE", choices[index])
                             val chosen = resolved.copy(selectedText = choices[index].text, requiresClarification = false,
                                 evidence = resolved.evidence + "HUMAN_SCREEN_TRANSCRIPT_CHOICE")
                             transcript = chosen.selectedText; handleCommand(chosen.selectedText, chosen)
-                        }.setNegativeButton("취소", null).show()
+                        }.setNegativeButton("취소", null).create().apply {
+                            setOnDismissListener { if (!accepted) audit.finish("LOW_CONFIDENCE", resolved.clarification) }
+                            show()
+                        }
+                    else audit.finish("LOW_CONFIDENCE", resolved.clarification)
                 } else handleCommand(command, resolved)
             }
             override fun onSpeechStarted() { if (current()) voiceTimes["T3"] = SystemClock.elapsedRealtime() - voiceStartedAt }
@@ -434,12 +467,14 @@ class MainActivity : ComponentActivity() {
             override fun onError(message: String) {
                 if (!current()) return
                 voiceGeneration++; source.cancel(); focus.release(); transcript = ""
+                audit.finish("STT_FAILED", message)
                 setVoicePhase(VoicePhase.IDLE); tell(message)
             }
-        }) }
+        }, audit) { "${voicePhase.name}; current=${generation == voiceGeneration}; token=$generation/$voiceGeneration" } }
         }
     }
-    private fun cancelVoice(silent: Boolean = false) {
+    private fun cancelVoice(silent: Boolean = false, reason: String = "USER_CANCEL") {
+        voiceAudit?.takeUnless { it.closed }?.let { it.event("CAPTURE_CANCEL", reason); it.finish("CANCELLED", reason) }
         voiceGeneration++; permissionPending = false
         voicePreparation?.cancel(); voicePreparation = null
         voiceWarming?.cancel(); voiceWarming = null
@@ -467,13 +502,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleCommand(text: String, speechEvidence: ResolvedTranscript? = null) {
-        if (busy) return
-        CommandSafety.blockedReason(text)?.let { tell(it); return }
+        val audit = if (speechEvidence != null) voiceAudit ?: engine.beginDiagnostics("MANUAL_MICROPHONE", voiceStartedAt, UUID.randomUUID().toString())
+            else engine.beginDiagnostics("TEXT_INPUT", SystemClock.elapsedRealtime(), UUID.randomUUID().toString())
+        engine.audit = audit
+        commandPreviousResponse = graph.planner.lastResponse
+        audit.event("COMMAND_ACCEPTANCE", mapOf("text" to text, "busy" to busy, "arbiterActive" to graph.invocationArbiter.isActive))
+        if (busy) { audit.finish("EXECUTION_FAILED", "UI_BUSY"); return }
+        CommandSafety.blockedReason(text)?.let { audit.finish("POLICY_BLOCKED", it); tell(it); return }
         val here = Regex("^여기(?:를)?\\s*(?:앞으로\\s*)?(.+?)(?:으로|로)\\s*(?:기억해|저장해)(?:줘)?$").matchEntire(text)
             ?: Regex("^여기\\s*앞으로\\s*(.+?)이라고\\s*해$").matchEntire(text)
-        if (here != null) { requestLocation(here.groupValues[1]); return }
+        if (here != null) { audit.event("LOCATION_DIALOG", here.groupValues[1]); audit.finish("FOREGROUND_TOOL", "사용자 위치 저장 확인 화면"); requestLocation(here.groupValues[1]); return }
         val alias = Regex("^(.+?)(?:를|을)\\s*(.+?)(?:으로|로)\\s*기억해(?:줘)?$").matchEntire(text)
         if (alias != null) {
+            audit.event("ALIAS_DIALOG", text); audit.finish("FOREGROUND_TOOL", "사용자 별칭 저장 확인 화면")
             launchSafe {
                 val resolution = withContext(Dispatchers.IO) { graph.resolver.resolve(alias.groupValues[1]) }
                 selectPlace(resolution) { candidate ->
@@ -489,7 +530,7 @@ class MainActivity : ComponentActivity() {
         launchSafe(command = true) {
             val started = if (speechEvidence != null) voiceStartedAt else SystemClock.elapsedRealtime()
             val times = if (speechEvidence != null) voiceTimes.toMutableMap() else linkedMapOf("T0" to 0L)
-            fun stage(value: EngineStage) { tell(engine.stageMessage(value)); if (value == EngineStage.POLICY_CHECK) times["T6"] = SystemClock.elapsedRealtime() - started }
+            fun stage(value: EngineStage) { audit.event("ENGINE_STAGE", value.name); tell(engine.stageMessage(value)); if (value == EngineStage.POLICY_CHECK) times["T6"] = SystemClock.elapsedRealtime() - started }
             val prepared = if (speechEvidence != null) engine.prepareSpeech(speechEvidence, useModel, ::stage) else engine.prepare(text, useModel, ::stage)
             val plan = prepared.plan
             val decision = prepared.decision
@@ -497,6 +538,7 @@ class MainActivity : ComponentActivity() {
                 is PolicyDecision.Ready -> {
                     times["T7"] = SystemClock.elapsedRealtime() - started
                     val outcome = runReady(decision)
+                    audit.event("EXECUTION_RESULT", outcome)
                     times["T8"] = SystemClock.elapsedRealtime() - started
                     if (outcome != null) recordCommand(text, speechEvidence, prepared, outcome, started, times)
                 }
@@ -531,21 +573,23 @@ class MainActivity : ComponentActivity() {
         started: Long, times: Map<String, Long>) {
         val failure = outcome?.failure ?: prepared.failure
         val success = outcome?.execution?.success == true && failure == null
-        graph.invocationDebug.write(InvocationTrace(sessionId = UUID.randomUUID().toString(),
+        val response = if (useModel) graph.planner.lastResponse?.takeUnless { it === commandPreviousResponse } else null
+        val audit = checkNotNull(engine.audit)
+        audit.finish(InvocationTrace(sessionId = audit.id,
             origin = if (speech == null) "TEXT_INPUT" else "MANUAL_MICROPHONE", profile = engine.profile.user,
             interpretation = prepared.interpretation, times = times,
             transitions = listOf("PLANNING", "POLICY_CHECK") + if (outcome != null) listOf("EXECUTING") else emptyList(),
             transcript = text, clarification = prepared.clarification?.prompt.orEmpty(),
             stt = if (speech != null) voiceMetrics else null, agentLoad = if (useModel) graph.planner.lastLoad else null,
-            modelInferenceMs = if (useModel) graph.planner.lastInferenceMs else null,
+            modelInferenceMs = response?.inferenceMs,
             toolPlan = prepared.plan.toString(), policy = prepared.decision.toString(),
             execution = outcome?.let { "${it.execution}; evidence=${it.evidence}" }.orEmpty(),
             disposition = outcome?.disposition?.name.orEmpty(),
             result = if (success) "SUCCESS" else failure?.state?.name ?: "EXECUTION_FAILED",
             error = failure?.message.orEmpty(), audioFocus = if (speech == null) "NOT_REQUESTED" else "RELEASED_BEFORE_INFERENCE",
             duplicateInvocations = 0, totalMs = SystemClock.elapsedRealtime() - started,
-            speech = if (speech != null) graph.speechDiagnostics.last else null,
-            selectedModel = graph.planner.selected.key, modelResponse = if (useModel) graph.planner.lastResponse else null))
+            speech = if (speech != null) audit.speech else null,
+            selectedModel = graph.planner.selected.key, modelResponse = response, modelEnabled = useModel))
     }
     private suspend fun runReady(ready: PolicyDecision.Ready, confirmed: Boolean = false): AgentOutcome? {
         if (!confirmed && ready.deviceCommands.any { it.requiresConfirmation }) {
@@ -803,11 +847,16 @@ class MainActivity : ComponentActivity() {
     private fun launchSafe(command: Boolean = false, block: suspend () -> Unit) {
         lifecycleScope.launch {
             val commandLease = if (command) UUID.randomUUID().toString() else null
-            if (commandLease != null && !graph.invocationArbiter.acquire(commandLease)) { tell("다른 음성 작업이 진행 중입니다."); return@launch }
+            if (commandLease != null && !graph.invocationArbiter.acquire(commandLease)) { engine.audit?.finish("EXECUTION_FAILED", "INVOCATION_LEASE_BUSY"); tell("다른 음성 작업이 진행 중입니다."); return@launch }
             activeJobs++
             if (command) setVoicePhase(VoicePhase.PROCESSING)
-            try { block() } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-            catch (_: Exception) { tell("작업을 완료하지 못했습니다. 입력과 기기 설정을 확인해 주세요.") }
+            try { block() } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                if (command) engine.audit?.finish("CANCELLED", "COMMAND_COROUTINE_CANCELLED"); throw cancelled
+            }
+            catch (failure: Exception) {
+                if (command) { engine.audit?.event("COMMAND_EXCEPTION", mapOf("class" to failure.javaClass.name, "message" to failure.message)); engine.audit?.finish("EXECUTION_FAILED", failure.message.orEmpty()) }
+                tell("작업을 완료하지 못했습니다. 입력과 기기 설정을 확인해 주세요.")
+            }
             finally {
                 commandLease?.let(graph.invocationArbiter::release)
                 if (command) graph.planner.releaseAfterIdle()

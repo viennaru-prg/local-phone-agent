@@ -74,10 +74,12 @@ class VoiceInvocationActivity : ComponentActivity() {
     }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        coordinator?.hostEvent(if (hasFocus) "FOCUS_GAINED" else "FOCUS_LOST")
         if (hasFocus) beginWhenReady()
     }
     override fun onResume() {
         super.onResume()
+        coordinator?.hostEvent("RESUME")
         // A call delivered behind keyguard reports AUTH_REQUIRED without waking or dismissing it.
         if (!started && !onboarding && !ProfileScope(this).canAct()) startCoordinator()
     }
@@ -135,7 +137,7 @@ class VoiceInvocationActivity : ComponentActivity() {
         }
         super.onStop()
     }
-    override fun onDestroy() { coordinator?.cancel(); super.onDestroy() }
+    override fun onDestroy() { coordinator?.hostEvent("DESTROY"); coordinator?.cancel(); super.onDestroy() }
     private fun closeEntry() { if (isTaskRoot) finishAndRemoveTask() else finish() }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 }

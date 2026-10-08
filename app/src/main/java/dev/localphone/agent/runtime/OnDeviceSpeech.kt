@@ -69,6 +69,7 @@ class OnDeviceSpeechInput(
                 override fun onRmsChanged(rmsdB: Float) { if (current()) listener.onLevel(((rmsdB + 2f) / 12f).coerceIn(0f, 1f)) }
                 override fun onPartialResults(results: Bundle?) {
                     if (!current()) return
+                    listener.onDiagnostic("NATIVE_PARTIAL_BUNDLE", rawBundle(results))
                     val candidates = hypotheses(results)
                     if (partials.size == 32) partials.removeAt(0)
                     partials += SpeechPartial(candidates, SystemClock.elapsedRealtime() - started)
@@ -76,6 +77,7 @@ class OnDeviceSpeechInput(
                 }
                 override fun onResults(results: Bundle?) {
                     if (!current()) return
+                    listener.onDiagnostic("NATIVE_FINAL_BUNDLE", rawBundle(results))
                     val finishedAt = SystemClock.elapsedRealtime()
                     val candidates = hypotheses(results)
                     val result = SpeechRecognitionResult(candidates, partials.toList(), engine = "android-native-on-device",
@@ -92,6 +94,7 @@ class OnDeviceSpeechInput(
                 }
                 override fun onError(error: Int) {
                     if (!current()) return
+                    listener.onDiagnostic("NATIVE_ERROR_CODE", mapOf("code" to error))
                     cancel()
                     listener.onFailure(when (error) {
                         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> SpeechFailure(SpeechError.PERMISSION_REQUIRED, "마이크 권한을 허용해주세요.")
@@ -108,6 +111,10 @@ class OnDeviceSpeechInput(
                 override fun onEvent(eventType: Int, params: Bundle?) = Unit
             })
             val request = recognitionIntent(vocabulary)
+            listener.onDiagnostic("NATIVE_REQUEST", mapOf("language" to "ko-KR", "factory" to "createOnDeviceSpeechRecognizer",
+                "extras" to request.extras?.keySet()?.sorted()?.associateWith { request.extras?.get(it)?.toString() },
+                "biasStrings" to vocabulary.take(48), "maximumMs" to maximumMs, "replayRequested" to (replaySource != null),
+                "configuredRecognitionService" to android.provider.Settings.Secure.getString(context.contentResolver, "voice_recognition_service")))
             if (replaySource != null) {
                 check(Build.VERSION.SDK_INT >= 33)
                 audio = replaySource.invoke()
@@ -120,10 +127,14 @@ class OnDeviceSpeechInput(
                 if (current()) { cancel(); listener.onFailure(SpeechFailure(SpeechError.STT_FAILED, "음성 인식이 오래 걸려 취소했습니다. 다시 말해 주세요.")) }
             }.also { main.postDelayed(it, maximumMs.coerceIn(3000, 30_000)) }
             engine.startListening(request)
-        } catch (_: Exception) {
+        } catch (failure: Exception) {
+            listener.onDiagnostic("NATIVE_EXCEPTION", mapOf("class" to failure.javaClass.name, "message" to failure.message))
             cancel(); listener.onFailure(SpeechFailure(SpeechError.STT_FAILED, "온디바이스 음성 인식을 시작하지 못했습니다. 음성 평가 화면에서 지원 상태를 확인해 주세요."))
         }
     }
+    private fun rawBundle(bundle: Bundle?) = mapOf("texts" to bundle?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION),
+        "confidenceKeyPresent" to (bundle?.containsKey(SpeechRecognizer.CONFIDENCE_SCORES) == true),
+        "confidenceValues" to bundle?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)?.map { it.toString() })
     override fun cancel() {
         generation++
         timeout?.let(main::removeCallbacks); timeout = null

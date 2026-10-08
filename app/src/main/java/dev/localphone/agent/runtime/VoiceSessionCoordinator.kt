@@ -24,6 +24,7 @@ class VoiceSessionCoordinator(
         fun onFinished(state: InvocationState)
     }
     val sessionId = UUID.randomUUID().toString()
+    private val audit = engine.beginDiagnostics("ANDROID_APP_LAUNCH", invokedAt, sessionId)
     private val machine = VoiceSessionStateMachine()
     val state get() = machine.state
     val active get() = ownsLease && !state.terminal
@@ -58,7 +59,7 @@ class VoiceSessionCoordinator(
 
     fun start(): Boolean {
         if (ownsLease) { duplicate(); return true }
-        if (!graph.invocationArbiter.acquire(sessionId)) return false
+        if (!graph.invocationArbiter.acquire(sessionId)) { audit.finish("EXECUTION_FAILED", "INVOCATION_LEASE_BUSY"); return false }
         ownsLease = true; mark("T1"); move(InvocationState.STARTING, "준비 중…")
         if (!engine.profile.canAct()) { finish(InvocationState.AUTH_REQUIRED, "잠금 해제 후 다시 호출해 주세요."); return true }
         if (graph.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -67,11 +68,14 @@ class VoiceSessionCoordinator(
         listen()
         return true
     }
-    fun duplicate() { if (active) duplicates++ }
+    fun duplicate() { if (active) { duplicates++; audit.event("DUPLICATE_INVOCATION", duplicates) } }
+    fun hostEvent(event: String) { audit.hostState(event, state.name) }
     fun hostStopped(continues: Boolean) {
+        audit.hostState("STOP", mapOf("state" to state.name, "continues" to continues, "externalExecution" to engine.externalExecution))
         if (active) transitions += if (continues) "ENTRY_STOPPED_COMMAND_CONTINUES" else "ENTRY_STOPPED_CANCELLED"
     }
     private fun move(next: InvocationState, message: String) {
+        audit.event("STATE_ATTEMPT", mapOf("from" to state.name, "to" to next.name))
         if (machine.move(next)) { transitions += next.name; observer.onState(next, message) }
     }
     private fun listen() {
@@ -87,6 +91,7 @@ class VoiceSessionCoordinator(
                     focusStatus = "DENIED"; finish(InvocationState.EXECUTION_FAILED, "음성 입력을 위한 오디오 사용 권한을 얻지 못했습니다."); return@launch
                 }
                 focusStatus = focus.modeName
+                audit.event("AUDIO_FOCUS", mapOf("acquired" to true, "mode" to focusStatus))
                 if (graph.speechFactoryOverride == null) delay(150)
                 if (active && token == speechToken) listenSource(token, context)
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -95,7 +100,7 @@ class VoiceSessionCoordinator(
     }
     private fun listenSource(token: Int, context: SpeechContext) {
         val source = graph.createSpeechInput(context); speech = source
-        source.start(object : SpeechInput.Listener {
+        source.startAudited(object : SpeechInput.Listener {
             private fun current() = active && token == speechToken && state in listOf(InvocationState.STARTING, InvocationState.LISTENING, InvocationState.TRANSCRIBING)
             override fun onListening() {
                 if (!current()) return
@@ -147,6 +152,8 @@ class VoiceSessionCoordinator(
                 speechToken++; source.cancel(); speech = null; deadline?.cancel(); focus.release()
                 var resolved = graph.speechDiagnostics.resolve(result, context)
                 if (speechDiagnostic == null) speechDiagnostic = graph.speechDiagnostics.last
+                audit.speech = speechDiagnostic
+                audit.event("RESOLVER_OUTPUT", graph.speechDiagnostics.last); audit.checkpoint()
                 var clean = resolved.selectedText.trim().trimEnd('.', '。', '!')
                 if (clean.isBlank()) { finish(InvocationState.NO_SPEECH, "음성을 듣지 못했습니다."); return }
                 if (resolved.requiresClarification) {
@@ -156,6 +163,7 @@ class VoiceSessionCoordinator(
                     if (!machine.clarifyOnce()) { finish(InvocationState.LOW_CONFIDENCE, resolved.clarification); return }
                     speechChoices = resolved.candidates.take(3); speechPrompt = resolved.clarification
                     transitions += "STT_AMBIGUITY_CLARIFICATION_ONCE"
+                    audit.event("VOICE_CLARIFICATION_REQUESTED", resolved.clarification); audit.checkpoint()
                     observer.onState(InvocationState.STARTING, speechPrompt)
                     listen(); return
                 }
@@ -179,7 +187,7 @@ class VoiceSessionCoordinator(
                 }
                 finish(state, failure.message)
             }
-        })
+        }, audit) { "${state.name}; current=${active && token == speechToken}; token=$token/$speechToken" }
     }
     private fun process(text: String) {
         work = scope.launch {
@@ -193,6 +201,7 @@ class VoiceSessionCoordinator(
                     engine.clarify(checkNotNull(clarification), text)
                 } else {
                     engine.prepareSpeech(speechEvidence ?: ResolvedTranscript(emptyList(), text, false, null, emptyList(), emptyList()), useModel) { stage ->
+                        audit.event("ENGINE_STAGE", stage.name)
                         planningMessage = engine.stageMessage(stage)
                         when (stage) {
                             EngineStage.PLANNING -> {
@@ -229,6 +238,7 @@ class VoiceSessionCoordinator(
                 if (state != InvocationState.POLICY_CHECK) { finish(InvocationState.POLICY_BLOCKED, "음성 세션 상태를 확인하지 못했습니다."); return@launch }
                 mark("T7"); move(InvocationState.EXECUTING, "실행 중…")
                 val outcome = engine.execute(ready)
+                audit.event("EXECUTION_RESULT", outcome)
                 mark("T8"); disposition = outcome.disposition
                 executionText = (outcome.execution?.toString() ?: "NOT_DISPATCHED") + "; evidence=" + outcome.evidence.joinToString(",")
                 outcome.failure?.let { finish(it.state, it.message); return@launch }
@@ -247,7 +257,7 @@ class VoiceSessionCoordinator(
         if (result == InvocationState.SUCCESS) feedback.success()
         else if (result != InvocationState.CANCELLED) feedback.failure()
         val currentResponse = if (useModel) graph.planner.lastResponse?.takeUnless { it === previousModelResponse } else null
-        graph.invocationDebug.write(InvocationTrace(sessionId = sessionId, profile = engine.profile.user,
+        audit.finish(InvocationTrace(sessionId = sessionId, profile = engine.profile.user,
             interpretation = interpretation,
             times = times.toMap(), transitions = transitions.toList(), transcript = transcript,
             clarification = clarificationText, stt = metrics, agentLoad = if (useModel) graph.planner.lastLoad else null,

@@ -60,6 +60,7 @@ class VoiceNavigationRegressionTest {
         graph.agentModelEnabledOverride = null
         graph.settings.put("ui_automation_consent", "yes"); graph.settings.put("voice_onboarded", "yes")
         graph.settings.put("voice_haptics", "no")
+        graph.settings.put("stt_diagnostics", "yes"); graph.settings.put("diagnostic_comparison_group", "synthetic-navigation-diagnostics")
         runBlocking { graph.places.all().forEach { graph.places.delete(it.id) }; graph.places.saveConfirmed(place)
             assertTrue(graph.planner.select(LocalModelId.QWEN3).success) }
         graph.speechFactoryOverride = { object : SpeechInput {
@@ -111,6 +112,10 @@ class VoiceNavigationRegressionTest {
             "response" to graph.planner.lastResponse, "fixture" to state)))
         assertEquals("SUCCESS", graph.invocationDebug.last?.result)
         assertEquals("MODEL_INFERENCE:qwen3", graph.invocationDebug.last?.interpretation)
+        val audit = checkNotNull(graph.invocationDebug.last?.audit)
+        assertTrue(audit.events.any { it.name == "MODEL_REQUEST" && it.payload!!.asJsonObject["user"].asString == "회사로 안내해 줘" })
+        assertTrue(audit.events.any { it.name == "MODEL_RESULT" })
+        assertTrue(audit.events.any { it.name == "EXECUTION_RESULT" })
         assertFalse(graph.uiAutomation.active)
         assertEquals("guidance", state["screen"]); assertEquals("1", state["navigation_starts"])
         assertEquals("0", state["saved_clicks"]); assertEquals("0", state["searches"])

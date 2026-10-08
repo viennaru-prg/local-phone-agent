@@ -32,6 +32,7 @@ interface SpeechInput : AutoCloseable {
         fun onFinal(text: String)
         fun onRecognition(result: SpeechRecognitionResult) = onFinal(result.hypotheses.firstOrNull()?.text.orEmpty())
         fun onError(message: String)
+        fun onDiagnostic(name: String, values: Map<String, Any?>) {}
         fun onSpeechStarted() {}
         fun onSpeechEnded() {}
         fun onSpeechStartedAt(elapsedRealtimeMs: Long) = onSpeechStarted()

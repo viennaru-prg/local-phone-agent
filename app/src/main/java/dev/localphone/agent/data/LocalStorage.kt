@@ -74,4 +74,11 @@ class SecureSettings(context: Context, private val cipher: LocalCipher) {
         if (value.isBlank()) prefs.edit().remove(key).apply()
         else prefs.edit().putString(key, Base64.encodeToString(cipher.encrypt(value, "setting:$key"), Base64.NO_WRAP)).apply()
     }
+    /** Used only by the background diagnostic writer so a completed flush survives process death. */
+    @Synchronized fun putDurable(key: String, value: String) {
+        val editor = prefs.edit()
+        if (value.isBlank()) editor.remove(key)
+        else editor.putString(key, Base64.encodeToString(cipher.encrypt(value, "setting:$key"), Base64.NO_WRAP))
+        check(editor.commit()) { "Encrypted setting could not be persisted" }
+    }
 }

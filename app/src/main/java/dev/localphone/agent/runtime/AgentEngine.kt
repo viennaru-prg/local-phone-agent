@@ -16,6 +16,9 @@ data class AgentOutcome(val execution: ExecutionResult?, val disposition: Result
 
 /** Goals own the execution lifecycle. Fast-path availability is not a policy precondition. */
 class AgentEngine(private val activity: Activity, private val graph: AgentApplication) {
+    var audit: InvocationDiagnostics? = null
+    fun beginDiagnostics(origin: String, startedAt: Long, id: String): InvocationDiagnostics =
+        InvocationDiagnostics(graph, activity, origin, startedAt, id).also { audit = it }
     fun stageMessage(stage: EngineStage) = when (stage) {
         EngineStage.PLANNING -> "명령 확인 중…"
         EngineStage.MODEL_LOADING -> "${graph.embeddedModels.info(graph.planner.selected).name} 준비 중…"
@@ -33,14 +36,21 @@ class AgentEngine(private val activity: Activity, private val graph: AgentApplic
     private val previousPackage = graph.uiAutomation.foregroundPackage()
     suspend fun speechContext(): SpeechContext = withContext(Dispatchers.IO) {
         val playback = runCatching { media.controllers().firstOrNull()?.playbackState?.state?.toString() }.getOrNull()
-        SpeechVocabulary.build(graph, device.apps(), previousPackage, playback)
+        SpeechVocabulary.build(graph, device.apps(), previousPackage, playback).also { context ->
+            audit?.event("SPEECH_CONTEXT", mapOf("context" to context, "biasStrings" to context.biasStrings(),
+                "foregroundAtEngineCreation" to previousPackage, "foregroundNow" to graph.uiAutomation.foregroundPackage(),
+                "timing" to graph.speechTiming())); audit?.checkpoint()
+        }
     }
     suspend fun prepareSpeech(speech: ResolvedTranscript, useModel: Boolean, onStage: (EngineStage) -> Unit = {}): PreparedRequest {
+        audit?.event("SPEECH_PLAN_GATE", speech)
         if (speech.requiresClarification) return blocked(InvocationState.LOW_CONFIDENCE, speech.clarification)
             .copy(speechConfidence = speech.confidence)
         return prepare(speech.selectedText, useModel, onStage).copy(speechConfidence = speech.confidence)
     }
     suspend fun prepare(utterance: String, useModel: Boolean, onStage: (EngineStage) -> Unit = {}): PreparedRequest {
+        audit?.event("PLAN_INPUT", mapOf("utterance" to utterance, "useModel" to useModel, "selectedModel" to graph.planner.selected.key))
+        audit?.checkpoint()
         onStage(EngineStage.PLANNING)
         CommandSafety.blockedReason(utterance)?.let { reason ->
             onStage(EngineStage.POLICY_CHECK); return blocked(InvocationState.POLICY_BLOCKED, reason)
@@ -51,14 +61,19 @@ class AgentEngine(private val activity: Activity, private val graph: AgentApplic
         if (useModel) {
             onStage(EngineStage.MODEL_LOADING)
             val prepared = graph.planner.prepare()
+            audit?.event("MODEL_PREPARATION", prepared)
             if (prepared.available) {
                 onStage(EngineStage.MODEL_INFERENCE)
+                audit?.event("MODEL_REQUEST", mapOf("system" to ModelToolCatalog.SYSTEM, "user" to utterance,
+                    "tools" to ModelToolCatalog.phone, "selectedModel" to graph.planner.selected.key)); audit?.checkpoint()
                 plan = graph.planner.plan(utterance)
+                audit?.event("MODEL_RESULT", mapOf("response" to graph.planner.lastResponse, "plan" to plan, "error" to graph.planner.lastError))
                 if (plan.actions.isNotEmpty()) interpretation = "MODEL_INFERENCE:${graph.planner.selected.key}"
                 else modelError = graph.planner.lastError
             } else modelError = prepared.error.orEmpty()
         }
         if (plan.actions.isEmpty()) {
+            audit?.event("RULE_FALLBACK", mapOf("modelError" to modelError))
             if (useModel) onStage(EngineStage.RULE_FALLBACK)
             plan = BasicCommandPlanner().plan(utterance)
             interpretation = "RULE_BASED" + if (modelError.isNotBlank()) "; selected=${graph.planner.selected.key}; $modelError" else ""
@@ -71,10 +86,11 @@ class AgentEngine(private val activity: Activity, private val graph: AgentApplic
             if (plan.actions.isEmpty()) { plan = GoalRequests.fallback(utterance); interpretation += "; ORIGINAL_GOAL_UI_FALLBACK" }
         }
         onStage(EngineStage.POLICY_CHECK)
-        return preparePlan(plan).copy(interpretation = interpretation)
+        return preparePlan(plan).copy(interpretation = interpretation).also { audit?.event("PREPARED_REQUEST", it); audit?.checkpoint() }
     }
     suspend fun preparePlan(plan: ToolPlan, selectedAppId: String? = null): PreparedRequest {
         val decision = withContext(Dispatchers.IO) { policy.prepare(plan, selectedAppId) }
+        audit?.event("POLICY_RESULT", mapOf("plan" to plan, "decision" to decision))
         if (decision is PolicyDecision.Ready) return PreparedRequest(plan, decision)
         decision as PolicyDecision.Blocked
         val resolution = decision.resolution
@@ -97,6 +113,7 @@ class AgentEngine(private val activity: Activity, private val graph: AgentApplic
         return null
     }
     suspend fun execute(ready: PolicyDecision.Ready, confirmed: Boolean = false): AgentOutcome {
+        audit?.event("EXECUTION_START", mapOf("ready" to ready, "confirmed" to confirmed)); audit?.checkpoint()
         val disposition = when {
             ready.navigationGoal != null || ready.destination != null -> ResultDisposition.FOREGROUND_NAVIGATION
             ready.deviceCommands.isNotEmpty() || ready.pendingDevices.isNotEmpty() || ready.appTasks.isNotEmpty() -> ResultDisposition.FOREGROUND_TOOL

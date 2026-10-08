@@ -65,8 +65,6 @@ class VoiceSessionCoordinator(
             finish(InvocationState.PERMISSION_REQUIRED, "마이크 권한을 허용해 주세요."); return true
         }
         listen()
-        // Capture is started first; local Agent initialization runs while the user speaks.
-        if (useModel && active) warming = scope.async { graph.planner.prepare() }
         return true
     }
     fun duplicate() { if (active) duplicates++ }
@@ -104,6 +102,12 @@ class VoiceSessionCoordinator(
                 mark(if (clarification == null) "T2" else "C_T2")
                 move(InvocationState.LISTENING, clarification?.prompt ?: speechPrompt.ifBlank { "듣는 중…" })
                 feedback.ready()
+                // listen() launches asynchronously. Do not start native model preparation
+                // before the actual microphone-ready callback, especially on a cold launch.
+                if (useModel && warming == null && active) {
+                    mark("MODEL_PREPARE_STARTED")
+                    warming = scope.async { graph.planner.prepare() }
+                }
                 deadline?.cancel()
                 deadline = scope.launch {
                     delay(graph.speechTiming().maxUtteranceMs.toLong() + 12000)
@@ -156,10 +160,7 @@ class VoiceSessionCoordinator(
                     listen(); return
                 }
                 speechChoices?.let { choices ->
-                    val selected = choices.filter { candidate ->
-                        PlaceText.normalize(candidate.text) == PlaceText.normalize(clean) ||
-                            candidate.selectionAliases.any { alias -> PlaceText.variants(clean).any { it in PlaceText.variants(alias) } }
-                    }.distinctBy { it.semanticKey }.singleOrNull()
+                    val selected = TranscriptSelection.select(choices, resolved)
                     if (selected == null) { finish(InvocationState.AMBIGUOUS, "말씀하신 명령을 구분하지 못했습니다. 다시 호출해 주세요."); return }
                     clean = selected.text; resolved = resolved.copy(selectedText = clean, evidence = resolved.evidence + "HUMAN_VOICE_CLARIFICATION")
                     clarificationText = result.hypotheses.first().text; speechChoices = null; speechPrompt = ""

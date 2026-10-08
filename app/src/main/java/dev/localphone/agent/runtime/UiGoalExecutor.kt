@@ -37,6 +37,7 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
             var searchedPersonal = false
             var idle = 0
             var startClicked = false
+            var startGestureRetried = false
             var previewObserved = false
             var startWaitAt: Long? = null
             var resolvedWaitAt: Long? = null
@@ -79,7 +80,8 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
                 val screen = screen()
                 val content = screen.text()
                 val normalized = PlaceText.normalize(content)
-                if (screen.nodes.any { it.role.contains("ProgressBar") } || Regex("불러오는중|로딩중|경로탐색중|계산중|loading", RegexOption.IGNORE_CASE).containsMatchIn(normalized)) {
+                val activeGuidance = SemanticUi.navigationStarted(screen)
+                if (!activeGuidance && (screen.nodes.any { it.role.contains("ProgressBar") } || Regex("불러오는중|로딩중|경로탐색중|계산중|loading", RegexOption.IGNORE_CASE).containsMatchIn(normalized))) {
                     delay(450); return@repeat
                 }
                 if (resolved) {
@@ -87,9 +89,20 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
                     val identity = listOfNotNull(selectedName, selectedAddress.takeIf(String::isNotBlank), known?.name)
                     val identityOnScreen = identity.any { PlaceText.normalize(it).let { value -> value.isNotBlank() && normalized.contains(value) } }
                     if (identityOnScreen) destinationObserved = true
+                    val explicitDestinations = SemanticUi.destinationLabels(screen)
+                    if (explicitDestinations.any { destination -> identity.none { expected ->
+                            PlaceText.variants(destination).any { it in PlaceText.variants(expected) } ||
+                                PlaceText.normalize(destination).contains(PlaceText.normalize(expected))
+                        } }) throw UiUnavailable(InvocationState.EXECUTION_FAILED, "지도 화면의 목적지가 요청한 장소와 달라 안내 시작을 중단했습니다.")
+                    // A verified route preview survives the transition to a driving screen that
+                    // hides the destination. Start-button discovery is not a prerequisite.
+                    if (identityOnScreen && SemanticUi.navigationPreview(screen)) {
+                        previewObserved = true
+                        if (startWaitAt == null) startWaitAt = SystemClock.elapsedRealtime()
+                    }
                     // A route preview or accepted click is not success. Observe guidance controls and driving status together.
-                    if (destinationObserved && SemanticUi.navigationStarted(screen) &&
-                        (startClicked || previewObserved && identityOnScreen)) {
+                    if (destinationObserved && activeGuidance &&
+                        (startClicked || previewObserved || structuredLaunched && identityOnScreen)) {
                         val reference = ProviderPlaceReference(phrase, selectedName ?: phrase, selectedAddress,
                             NaverLinks.PACKAGE, System.currentTimeMillis())
                         return@run UiGoalResult("${selectedName ?: phrase} 안내 시작을 지도 화면에서 확인했습니다.",
@@ -113,6 +126,16 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
                     }
                     if (startClicked) {
                         progress("안내 시작 후 실제 주행 화면 확인 중…")
+                        // Some custom controls acknowledge ACTION_CLICK without handling it.
+                        // Re-observe the still-present enabled button and retry once using its
+                        // live bounds. Never retry once active guidance has been observed.
+                        val retry = start.firstOrNull { it.enabled }
+                        if (!startGestureRetried && retry != null &&
+                            SystemClock.elapsedRealtime() - (startWaitAt ?: 0) >= 600) {
+                            startGestureRetried = true
+                            act(screen, UiCommand.Click(retry.token, gesture = true))
+                            delay(100); return@repeat
+                        }
                         if (SystemClock.elapsedRealtime() - (startWaitAt ?: SystemClock.elapsedRealtime()) >= 12_000)
                             throw UiUnavailable(InvocationState.EXECUTION_FAILED, "안내 시작을 눌렀지만 실제 주행 안내 상태를 확인하지 못했습니다.")
                         delay(300); return@repeat
@@ -268,7 +291,8 @@ class NaverUiGoal(private val graph: AgentApplication, private val navigation: N
             try {
                 result.reference?.let(cache::save)
                 val coordinates = result.coordinates
-                if (coordinates != null && coordinates.supportedByNaver() && graph.settings.get("cache_ui_places") != "no") {
+                val alreadyLocal = known?.id?.let { graph.places.get(it) } != null
+                if (!alreadyLocal && coordinates != null && coordinates.supportedByNaver() && graph.settings.get("cache_ui_places") != "no") {
                     val id = slot ?: "ui_${PlaceText.normalize(phrase).hashCode().toUInt()}"
                     if (graph.places.get(id) == null) {
                         val now = System.currentTimeMillis()

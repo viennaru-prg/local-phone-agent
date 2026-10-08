@@ -99,17 +99,30 @@ class AgentAccessibilityService : AccessibilityService(), UiAccess {
     }
     private fun label(node: AccessibilityNodeInfo): String = listOfNotNull(node.text?.toString(), node.contentDescription?.toString(),
         if (node.isEditable) node.hintText?.toString() else null).filter(String::isNotBlank).distinct().joinToString(" · ").take(400)
+    private fun clickAction(node: AccessibilityNodeInfo) = node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK }
+    private fun tapEligible(node: AccessibilityNodeInfo): Boolean {
+        if (node.isEditable || !SemanticUi.navigationStartLabel(label(node))) return false
+        val role = node.className?.toString().orEmpty()
+        val id = node.viewIdResourceName.orEmpty().substringAfterLast('/')
+        if (!role.endsWith("Button") && !Regex("(?:btn|button).*?(?:start|guide|navi)|(?:start|guide).*?(?:btn|button)", RegexOption.IGNORE_CASE).containsMatchIn(id)) return false
+        val bounds = Rect(); node.getBoundsInScreen(bounds)
+        val display = resources.displayMetrics
+        // A semantic button's own observed bounds, never a root container or a guessed coordinate.
+        return !bounds.isEmpty && bounds.left >= 0 && bounds.top >= 0 && bounds.right <= display.widthPixels &&
+            bounds.bottom <= display.heightPixels && bounds.height() <= display.heightPixels / 3
+    }
 
     override fun screen(id: String): UiScreen? {
         if (session != id || graph.settings.get("ui_automation_consent") != "yes") return null
         val root = activeRoot() ?: return null
         val nodes = mutableListOf<UiNode>()
         fun visit(node: AccessibilityNodeInfo, token: String, parent: String?, depth: Int) {
-            if (depth > 18 || nodes.size >= 180 || node.isPassword || !node.isVisibleToUser) return
+            if (depth > 28 || nodes.size >= 384 || node.isPassword || !node.isVisibleToUser) return
             if (android.os.Build.VERSION.SDK_INT >= 34 && node.isAccessibilityDataSensitive) return
             if (node.packageName?.toString() != target) return
             nodes += UiNode(token, label(node), node.viewIdResourceName.orEmpty(), node.className?.toString().orEmpty(),
-                node.isClickable, node.isEditable, node.isScrollable, parent, enabled = node.isEnabled)
+                node.isClickable, node.isEditable, node.isScrollable, parent, enabled = node.isEnabled,
+                clickAction = clickAction(node), tapEligible = tapEligible(node))
             for (index in 0 until node.childCount) {
                 val child = runCatching { node.getChild(index) }.getOrNull() ?: continue
                 try { visit(child, "$token.$index", token, depth + 1) } finally { release(child) }
@@ -121,7 +134,7 @@ class AgentAccessibilityService : AccessibilityService(), UiAccess {
         return observed.copy(nodes = nodes.map { it.copy(fingerprint = UiFingerprint.describe(observed, it)) }).also { lastScreen = it }
     }
     private fun find(root: AccessibilityNodeInfo, token: String): AccessibilityNodeInfo? {
-        if (!token.matches(Regex("r(?:\\.\\d+){0,18}"))) return null
+        if (!token.matches(Regex("r(?:\\.\\d+){0,28}"))) return null
         @Suppress("DEPRECATION") var current = AccessibilityNodeInfo.obtain(root)
         for (index in token.split('.').drop(1)) {
             val childIndex = index.toInt()
@@ -166,7 +179,8 @@ class AgentAccessibilityService : AccessibilityService(), UiAccess {
                         node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
                     is UiCommand.Scroll -> node.isScrollable && node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
                     is UiCommand.Click -> {
-                        if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) true
+                        if (!(node.isClickable || clickAction(node) || tapEligible(node))) false
+                        else if (!command.gesture && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) true
                         else tapObservedNode(id, node)
                     }
                     UiCommand.Back -> false
@@ -177,10 +191,11 @@ class AgentAccessibilityService : AccessibilityService(), UiAccess {
     private fun liveFingerprint(root: AccessibilityNodeInfo): String {
         val values = mutableListOf<UiNode>()
         fun visit(node: AccessibilityNodeInfo, token: String, parent: String?, depth: Int) {
-            if (depth > 18 || values.size >= 41 || !node.isVisibleToUser || node.isPassword || node.packageName?.toString() != target) return
+            if (depth > 28 || values.size >= 41 || !node.isVisibleToUser || node.isPassword || node.packageName?.toString() != target) return
             if (android.os.Build.VERSION.SDK_INT >= 34 && node.isAccessibilityDataSensitive) return
             values += UiNode(token, label(node), node.viewIdResourceName.orEmpty(), node.className?.toString().orEmpty(),
-                node.isClickable, node.isEditable, node.isScrollable, parent, enabled = node.isEnabled)
+                node.isClickable, node.isEditable, node.isScrollable, parent, enabled = node.isEnabled,
+                clickAction = clickAction(node), tapEligible = tapEligible(node))
             for (i in 0 until node.childCount) {
                 val child = runCatching { node.getChild(i) }.getOrNull() ?: continue
                 try { visit(child, "$token.$i", token, depth + 1) } finally { release(child) }

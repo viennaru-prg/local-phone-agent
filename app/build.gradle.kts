@@ -10,8 +10,8 @@ android {
         applicationId = "dev.localphone.agent"
         minSdk = 26
         targetSdk = 35
-        versionCode = providers.gradleProperty("releaseVersionCode").getOrElse("10").toInt()
-        versionName = providers.gradleProperty("releaseVersionName").getOrElse("0.7.1")
+        versionCode = providers.gradleProperty("releaseVersionCode").getOrElse("11").toInt()
+        versionName = providers.gradleProperty("releaseVersionName").getOrElse("0.7.2")
         val updateRepository = providers.gradleProperty("updateRepository").getOrElse("viennaru-prg/local-phone-agent")
         require(Regex("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+").matches(updateRepository))
         buildConfigField("String", "UPDATE_REPOSITORY", "\"$updateRepository\"")

@@ -5,6 +5,10 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.localphone.agent.runtime.OnDeviceSpeechInput
+import dev.localphone.agent.runtime.SpeechVocabulary
+import androidx.test.platform.app.InstrumentationRegistry
+import dev.localphone.core.*
+import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import org.junit.Assert.*
 import org.junit.runner.RunWith
@@ -35,5 +39,17 @@ class SpeechStructureTest {
         assertEquals(48, request.getStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS)!!.size)
         assertFalse(request.getBooleanExtra(RecognizerIntent.EXTRA_ENABLE_BIASING_DEVICE_CONTEXT, true))
         assertFalse(request.hasExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS))
+    }
+    @Test fun supportedSlotDoesNotBecomeSecondDestinationBesideRealLocalAlias() = runBlocking {
+        val graph = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as AgentApplication
+        val place = UserPlace("synthetic-office-uuid", "테스트 지사", listOf("회사"), Coordinates(36.1, 128.1), "합성 주소", "TEST", PlaceSource.MANUAL, 1, 1)
+        try {
+            graph.places.saveConfirmed(place)
+            val context = SpeechVocabulary.build(graph, emptyList(), null, null)
+            val resolved = ContextualTranscriptResolver().resolve(SpeechRecognitionResult(
+                listOf(SpeechHypothesis("회사로 안내해 줘", .35f, 0)), engine = "FIXTURE", onDevice = true), context)
+            assertFalse(resolved.requiresClarification)
+            assertEquals(1, context.entities.count { it.name == "회사" || "회사" in it.aliases })
+        } finally { graph.places.delete(place.id) }
     }
 }

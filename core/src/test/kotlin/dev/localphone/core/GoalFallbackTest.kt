@@ -90,4 +90,26 @@ class GoalFallbackTest {
         val screen = UiScreen("app", 1, listOf(UiNode("done", "테스트 메모 저장 완료")))
         assertFalse(UiGrounding.allowed("테스트 메모를 저장해줘", screen, UiCommand.Click("done")))
     }
+    @Test fun navigationStartSupportsOsClickActionAndObservedSemanticButton() {
+        for (node in listOf(UiNode("start", "안내 시작", clickAction = true),
+            UiNode("start", "안내 시작 · 5초 후 자동 시작", role = "android.widget.Button", tapEligible = true))) {
+            val screen = UiScreen("map", 1, listOf(node))
+            assertEquals(listOf("start"), SemanticUi.navigationStartTargets(screen).map { it.token })
+            assertTrue(UiGrounding.allowed("회사로 안내 시작", screen, UiCommand.Click("start", gesture = true)))
+        }
+        assertTrue(SemanticUi.navigationStartTargets(UiScreen("map", 1, listOf(UiNode("label", "안내 시작")))).isEmpty())
+    }
+    @Test fun drivingTelemetryCanConfirmActiveGuidanceWithEndControlHidden() {
+        val nodes = listOf(UiNode("speed", "0 km/h"), UiNode("distance", "4.2 km"),
+            UiNode("arrival", "12:30 도착"), UiNode("voice", "음성 안내", clickable = true))
+        assertTrue(SemanticUi.navigationStarted(UiScreen("map", 1, nodes)))
+        assertFalse(SemanticUi.navigationStarted(UiScreen("map", 2, nodes.drop(1))))
+        assertFalse(SemanticUi.navigationStarted(UiScreen("map", 3, nodes + UiNode("start", "안내 시작", clickable = true))))
+        assertFalse(SemanticUi.navigationStarted(UiScreen("map", 4, nodes.filter { it.token != "voice" })))
+    }
+    @Test fun explicitDestinationEvidenceRemainsSeparateFromDrivingTelemetry() {
+        val screen = UiScreen("map", 1, listOf(UiNode("destination", "목적지: 서울역"), UiNode("arrival", "12:30 도착")))
+        assertEquals(listOf("서울역"), SemanticUi.destinationLabels(screen))
+        assertFalse(SemanticUi.navigationStarted(screen))
+    }
 }

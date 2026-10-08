@@ -376,6 +376,7 @@ class MainActivity : ComponentActivity() {
     private fun startVoice() {
         val generation = ++voiceGeneration
         voiceStartedAt = SystemClock.elapsedRealtime(); voiceMetrics = null
+        voiceWarming?.cancel(); voiceWarming = null
         voiceTimes.clear(); voiceTimes["T0"] = 0; voiceTimes["T1"] = 0
         speech?.close()
         transcript = ""; statusMessage = ""
@@ -391,7 +392,14 @@ class MainActivity : ComponentActivity() {
             if (generation != voiceGeneration) { focus.release(); return@launch }
         speech = graph.createSpeechInput(context).also { source -> source.start(object : SpeechInput.Listener {
             private fun current() = generation == voiceGeneration && voicePhase in listOf(VoicePhase.PREPARING, VoicePhase.LISTENING)
-            override fun onListening() { if (current()) { voiceTimes["T2"] = SystemClock.elapsedRealtime() - voiceStartedAt; setVoicePhase(VoicePhase.LISTENING); HapticVoiceFeedback(this@MainActivity, graph.settings).ready() } }
+            override fun onListening() { if (current()) {
+                voiceTimes["T2"] = SystemClock.elapsedRealtime() - voiceStartedAt
+                setVoicePhase(VoicePhase.LISTENING); HapticVoiceFeedback(this@MainActivity, graph.settings).ready()
+                if (useModel && voiceWarming == null) {
+                    voiceTimes["MODEL_PREPARE_STARTED"] = SystemClock.elapsedRealtime() - voiceStartedAt
+                    voiceWarming = lifecycleScope.launch { graph.planner.prepare() }
+                }
+            } }
             override fun onLevel(level: Float) { if (current()) voiceButton?.setLevel(level) }
             override fun onPartial(text: String) { if (current()) { transcript = text; updateVoiceHome() } }
             override fun onFinal(text: String) {
@@ -429,7 +437,6 @@ class MainActivity : ComponentActivity() {
                 setVoicePhase(VoicePhase.IDLE); tell(message)
             }
         }) }
-        if (useModel && generation == voiceGeneration) voiceWarming = lifecycleScope.launch { graph.planner.prepare() }
         }
     }
     private fun cancelVoice(silent: Boolean = false) {

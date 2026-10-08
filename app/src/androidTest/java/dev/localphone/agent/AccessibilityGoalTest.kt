@@ -172,7 +172,8 @@ class AccessibilityGoalTest {
         mode("failed_navigation")
         val outcome = result(task("회사로 가자"))
         assertEquals(InvocationState.EXECUTION_FAILED, outcome.failure?.state); assertEquals(false, outcome.execution?.success)
-        assertEquals(1, count("navigation_starts")); assertNull(office()); assertNull(cache())
+        // Initial click plus exactly one observed gesture retry; neither proves guidance.
+        assertEquals(2, count("navigation_starts")); assertNull(office()); assertNull(cache())
     }
     @Test fun delayedStartControlIsReobservedAndClickedExactlyOnce() {
         mode("delayed_navigation")
@@ -196,6 +197,32 @@ class AccessibilityGoalTest {
         val outcome = result(task("회사로 가자"))
         assertNotNull(outcome.failure); assertEquals(false, outcome.execution?.success)
         assertEquals(1, count("navigation_starts")); assertNull(office()); assertNull(cache())
+    }
+    @Test fun ignoredAccessibilityStartClickRetriesActualObservedGestureThenFinishes() {
+        mode("acknowledged_navigation")
+        success(result(task("회사로 안내해 줘")))
+        assertEquals(1, count("ignored_accessibility_clicks")); assertEquals(1, count("gesture_taps"))
+        assertEquals(1, count("navigation_starts")); assertFalse(graph.uiAutomation.active)
+    }
+    @Test fun semanticButtonWithoutClickableFlagUsesObservedGesture() {
+        mode("semantic_button_navigation")
+        success(result(task("회사로 안내해 줘")))
+        assertEquals(1, count("gesture_taps")); assertEquals(1, count("navigation_starts"))
+        assertFalse(graph.uiAutomation.active)
+    }
+    @Test fun automaticGuidanceFinishesWhenStartAndDestinationAndEndControlsAreHidden() {
+        mode("hidden_destination_auto_navigation")
+        val started = SystemClock.elapsedRealtime()
+        val outcome = result(task("회사로 안내해 줘")); success(outcome)
+        assertEquals(listOf("NAVIGATION_ACTIVE_AFTER_OBSERVED_COUNTDOWN"), outcome.evidence)
+        assertTrue(SystemClock.elapsedRealtime() - started < 10_000)
+        assertEquals(1, count("navigation_starts")); assertFalse(graph.uiAutomation.active)
+    }
+    @Test fun explicitWrongDestinationStillFailsWithHiddenEndControl() {
+        mode("wrong_hidden_destination_auto_navigation")
+        val outcome = result(task("회사로 안내해 줘"))
+        assertNotNull(outcome.failure); assertEquals(false, outcome.execution?.success)
+        assertNull(office()); assertNull(cache()); assertFalse(graph.uiAutomation.active)
     }
     @Test fun coordinatesNotExposedAreNotInventedButProviderIdentityCanBeCached() {
         mode("no_coordinates")

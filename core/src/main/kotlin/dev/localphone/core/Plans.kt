@@ -42,8 +42,8 @@ class BasicCommandPlanner : IntentPlanner {
         val media = Regex("(?:노래|음악)\\s*(?:를\\s*)?(?:재생(?:해줘|해|해 줘)?|틀어(?:줘)?|켜(?:줘)?)|(?:미디어|음악)\\s*이어\\s*(?:재생|틀어)")
         val mediaFound = media.containsMatchIn(text)
         val remainder = media.replace(text, "").trim(' ', ',', '.', '!')
-        val navigation = Regex("^(.+?)\\s*(?:네비(?:게이션)?\\s*(?:찍(?:어줘|어 줘|어|고)|켜(?:줘)?|시작(?:해줘)?)|가자|가줘|가 줘|가면서|안내해줘|길\\s*안내해줘)\\s*$")
-        val match = navigation.matchEntire(remainder)
+        val match = NavigationLanguage.whole.matchEntire(remainder)
+            ?: Regex("^(.+?)\\s*가면서\\s*$").matchEntire(remainder)
         val actions = mutableListOf<Action>()
         match?.groupValues?.get(1)?.trim()?.let { destination ->
             val phrase = destination.trim()

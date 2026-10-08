@@ -78,6 +78,8 @@ class VoiceModelConnectionTest {
         val response = checkNotNull(graph.planner.lastResponse)
         assertEquals(listOf(Action.SetAlarm(7, 0)), ToolPlanDecoder.decode(response.calls).actions)
         assertEquals("qwen3", graph.planner.loadedId)
+        val times = graph.invocationDebug.last!!.times
+        assertTrue(times.getValue("MODEL_PREPARE_STARTED") >= times.getValue("T2"))
         val value = mapOf("scope" to "owned API35 x86_64 AVD, synthetic PCM, real local decoder and native Qwen",
             "version" to BuildConfig.VERSION_NAME, "elapsed_ms" to SystemClock.elapsedRealtime() - started,
             "selected" to graph.planner.selected.key, "load" to graph.planner.lastLoad,
@@ -109,5 +111,24 @@ class VoiceModelConnectionTest {
         }
         await { assertEquals("com.google.android.deskclock", device.currentPackageName) }
         record("launcher-mic", started)
+    }
+    @Test fun coldAutomaticEntryWaitsForMicrophoneReadyBeforePreparingModel() {
+        var listener: SpeechInput.Listener? = null
+        graph.speechFactoryOverride = { object : SpeechInput {
+            override fun start(value: SpeechInput.Listener) { listener = value }
+            override fun cancel() = Unit
+        } }
+        main { context.startActivity(context.packageManager.getLaunchIntentForPackage(context.packageName)!!) }
+        await(10_000) { main { entry = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED)
+            .filterIsInstance<VoiceInvocationActivity>().singleOrNull() }; assertNotNull(listener) }
+        SystemClock.sleep(300)
+        assertEquals(InvocationState.STARTING, entry?.coordinator?.state)
+        assertEquals(ModelRuntimeState.INSTALLED, graph.planner.status.value.getValue(LocalModelId.QWEN3).state)
+        assertNull(graph.planner.loadedId)
+        main { listener!!.onListening() }
+        await(10_000) { assertEquals(InvocationState.LISTENING, entry?.coordinator?.state)
+            assertNotEquals(ModelRuntimeState.INSTALLED, graph.planner.status.value.getValue(LocalModelId.QWEN3).state) }
+        main { entry!!.coordinator!!.cancel() }
+        assertTrue(graph.invocationDebug.last!!.times.getValue("MODEL_PREPARE_STARTED") >= graph.invocationDebug.last!!.times.getValue("T2"))
     }
 }

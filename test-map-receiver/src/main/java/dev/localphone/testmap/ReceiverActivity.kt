@@ -3,6 +3,8 @@ package dev.localphone.testmap
 import android.app.Activity
 import android.os.Bundle
 import android.content.Intent
+import android.view.MotionEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.*
 
 /** Real, separate Android UI fixture. No navigation/network/audio; never install in place of NAVER on a phone. */
@@ -67,7 +69,8 @@ class ReceiverActivity : Activity() {
             "saved_search" -> { text("저장 목록"); searchInput(true, preserve = true) }
             "public_search", "public_office" -> text("저장한 장소 없음")
             "ambiguous_office" -> { place("회사", "서울시 테스트로 11", 36.111111, 128.111111); place("회사", "서울시 테스트로 22", 36.222222, 128.222222) }
-            "saved_office", "failed_navigation", "no_coordinates", "delayed_navigation", "countdown_navigation", "auto_navigation", "wrong_auto_navigation" -> place("회사", "서울시 테스트로 11", 36.111111, 128.111111)
+            "saved_office", "failed_navigation", "no_coordinates", "delayed_navigation", "countdown_navigation", "auto_navigation", "wrong_auto_navigation",
+            "acknowledged_navigation", "semantic_button_navigation", "hidden_destination_auto_navigation", "wrong_hidden_destination_auto_navigation" -> place("회사", "서울시 테스트로 11", 36.111111, 128.111111)
             else -> text("저장한 장소 없음")
         }
     }
@@ -157,8 +160,12 @@ class ReceiverActivity : Activity() {
         fun start() {
             count("navigation_starts")
             if (mode != "failed_navigation") {
-                if (mode == "wrong_auto_navigation") destination = "엉뚱한 다른 목적지"
-                page("guidance"); text(destination); text("안내 중 · 남은 거리 4km · 도착 예정 12:30"); button("안내 종료") { page("stopped") }
+                if (mode == "wrong_auto_navigation" || mode == "wrong_hidden_destination_auto_navigation") destination = "엉뚱한 다른 목적지"
+                page("guidance")
+                if (mode in listOf("acknowledged_navigation", "semantic_button_navigation", "hidden_destination_auto_navigation", "wrong_hidden_destination_auto_navigation")) {
+                    if (mode == "wrong_hidden_destination_auto_navigation") text("목적지: $destination")
+                    text("0 km/h"); text("4.2 km"); text("12:30 도착"); button("음성 안내") { }
+                } else { text("목적지: $destination"); text("안내 중 · 남은 거리 4km · 도착 예정 12:30"); button("안내 종료") { page("stopped") } }
             }
         }
         if (mode == "delayed_navigation") {
@@ -166,6 +173,32 @@ class ReceiverActivity : Activity() {
             val pageBody = body
             text("경로 정보 준비 중")
             body.postDelayed({ if (!isFinishing && body === pageBody) button("안내 시작") { start() } }, 3200)
+            return
+        }
+        if (mode == "acknowledged_navigation") {
+            body.addView(object : Button(this) {
+                override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
+                    if (action == AccessibilityNodeInfo.ACTION_CLICK) { count("ignored_accessibility_clicks"); return true }
+                    return super.performAccessibilityAction(action, arguments)
+                }
+            }.apply { text = "안내 시작"; setOnClickListener { count("gesture_taps"); start() } })
+            return
+        }
+        if (mode == "semantic_button_navigation") {
+            body.addView(Button(this).apply {
+                text = "안내 시작"; isClickable = false
+                setOnTouchListener { _, event ->
+                    if (event.action == MotionEvent.ACTION_UP) { count("gesture_taps"); start() }
+                    true
+                }
+            })
+            return
+        }
+        if (mode == "hidden_destination_auto_navigation" || mode == "wrong_hidden_destination_auto_navigation") {
+            // No recognized start button, and the active page hides the destination and End.
+            text("잠시 후 경로를 안내할게요")
+            val pageBody = body
+            body.postDelayed({ if (!isFinishing && body === pageBody) start() }, 3000)
             return
         }
         val startButton = button(if (mode == "countdown_navigation") "안내 시작 (3초)" else "안내 시작") { start() }

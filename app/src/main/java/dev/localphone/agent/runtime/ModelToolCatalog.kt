@@ -45,18 +45,18 @@ object ModelToolCatalog {
         val tokens get() = tokenByAlias.values.toSet()
     }
     fun observation(goal: String, screen: UiScreen, history: List<String>, limit: Int): Observation {
-        val shown = (screen.nodes.filter { it.clickable || it.editable || it.scrollable } + screen.nodes.filter { it.label.isNotBlank() })
+        val shown = (screen.nodes.filter { it.canClick || it.editable || it.scrollable } + screen.nodes.filter { it.label.isNotBlank() })
             .distinctBy { it.token }.take(limit)
         val aliases = shown.mapIndexed { index, node -> "n$index" to node.token }.toMap()
         fun ids(check: (UiNode) -> Boolean) = shown.mapIndexedNotNull { index, node -> if (check(node)) "n$index" else null }
-        val actions = mapOf("ui_click" to ids { it.enabled && screen.clickTarget(it).let { target -> target.clickable && target.enabled } },
+        val actions = mapOf("ui_click" to ids { it.enabled && screen.clickTarget(it).let { target -> target.canClick && target.enabled } },
             "ui_set_text" to ids { it.enabled && it.editable }, "ui_submit" to ids { it.enabled && it.editable },
             "ui_scroll" to ids { it.enabled && it.scrollable }, "ui_complete" to ids { it.label.isNotBlank() },
-            "ui_choose" to ids { it.enabled && it.label.isNotBlank() && screen.clickTarget(it).clickable })
+            "ui_choose" to ids { it.enabled && it.label.isNotBlank() && screen.clickTarget(it).canClick })
         // Compact IDs are resolved only against THIS observation. Actual service tokens and
         // fingerprints remain unchanged, and never become model-generated coordinates.
         val nodes = shown.mapIndexed { index, node -> listOf("n$index", node.label.take(100),
-            node.role.substringAfterLast('.'), if (node.clickable) "click" else "",
+            node.role.substringAfterLast('.'), if (node.canClick) "click" else "",
             if (node.editable) "edit" else "", if (node.scrollable) "scroll" else "", if (node.enabled) "enabled" else "disabled") }
         return Observation(Gson().toJson(mapOf("goal" to goal, "app" to screen.packageName,
             "node_columns" to "id,label,role,clickable,editable,scrollable,enabled", "nodes" to nodes,

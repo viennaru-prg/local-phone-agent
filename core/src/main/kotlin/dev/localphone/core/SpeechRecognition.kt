@@ -30,10 +30,24 @@ data class ResolvedTranscript(
     val requiresClarification: Boolean = false, val clarification: String = "",
 )
 
+/** A spoken answer may restate the same entity/action with a different request ending. */
+object TranscriptSelection {
+    fun select(choices: List<TranscriptCandidate>, answer: ResolvedTranscript): TranscriptCandidate? {
+        if (answer.requiresClarification) return null
+        val text = PlaceText.normalize(answer.selectedText)
+        val keys = answer.candidates.filter { PlaceText.normalize(it.text) == text }.map { it.semanticKey }.toSet()
+        return choices.filter { candidate -> candidate.semanticKey in keys ||
+            PlaceText.normalize(candidate.text) == text || candidate.selectionAliases.any { alias ->
+                PlaceText.variants(answer.selectedText).any { it in PlaceText.variants(alias) }
+            }
+        }.distinctBy { it.semanticKey }.singleOrNull()
+    }
+}
+
 /** Conservative local rescoring. Scores are deterministic evidence weights, not ASR probabilities. */
 class ContextualTranscriptResolver {
     private data class Frame(val kind: SpeechEntityKind, val entity: String, val suffix: String, val elliptical: Boolean = false)
-    private val navigation = Regex("^(.+?)(\\s*(?:가자|가줘|가 줘|안내해줘|길\\s*안내해줘|네비(?:게이션)?\\s*찍(?:어줘|어|고)|가면서|가고).*)$")
+    private val navigation = NavigationLanguage.frame
     private val app = Regex("^(.+?)(\\s*(?:앱(?:을)?\\s*)?(?:켜줘|켜 줘|열어줘|열어 줘|실행해줘|실행해 줘))$")
     private val highRisk = Regex("전화(?:를|을)?\\s*(?:걸|해|연결)|통화(?:해|하)|메시지.*(?:보내|전송)|문자.*(?:보내|전송)|삭제|결제|송금|보내줘|전송해")
     private fun clean(text: String) = text.trim().trimEnd('.', '。', '!')
@@ -56,8 +70,31 @@ class ContextualTranscriptResolver {
     }
     private fun key(text: String, f: Frame?, entity: SpeechEntity?): String = when {
         f != null -> f.kind.name + ":" + (entity?.id ?: PlaceText.variants(f.entity).minBy { it.length }) + ":" +
-            if (f.kind == SpeechEntityKind.APP) "OPEN_APP" else if (Regex("^(?:가자|가줘|가 줘|안내해줘|길\\s*안내해줘|네비(?:게이션)?\\s*찍(?:어줘|어))$").matches(f.suffix.trim())) "NAVIGATE" else PlaceText.normalize(f.suffix)
+            if (f.kind == SpeechEntityKind.APP) "OPEN_APP" else if (NavigationLanguage.simpleEnding(f.suffix)) "NAVIGATE" else PlaceText.normalize(f.suffix)
         else -> "UTTERANCE:" + PlaceText.normalize(text)
+    }
+    private fun corroboratedNativeZero(result: SpeechRecognitionResult, context: SpeechContext,
+        hypotheses: List<SpeechHypothesis>, best: TranscriptCandidate): Boolean {
+        // Zero remains a measured low score. A converging partial stream can support a
+        // literal, reversible goal without promoting that score or executing a partial.
+        if (result.engine != "android-native-on-device" || !result.onDevice || result.source != "MICROPHONE" ||
+            best.acousticConfidence != 0f || best.generated) return false
+        fun literalKey(text: String): String? {
+            if (CommandSafety.blockedReason(text) != null || highRisk.containsMatchIn(text)) return null
+            val f = frame(clean(text)) ?: return null
+            if (f.kind != SpeechEntityKind.PLACE || !NavigationLanguage.simpleEnding(f.suffix)) return null
+            val entities = context.entities.filter { matches(it, f) }.distinctBy { it.id }
+            if (entities.size > 1) return null
+            return key(text, f, entities.singleOrNull())
+        }
+        if (hypotheses.any { literalKey(it.text) != best.semanticKey }) return false
+        val finalText = PlaceText.normalize(clean(hypotheses.first().text))
+        val partials = result.partialResults.flatMap { it.hypotheses }.map { clean(it.text) }.filter(String::isNotBlank)
+        val observations = partials.map(PlaceText::normalize).distinct()
+        // Repeated callbacks, including several at one timestamp, are not independent votes.
+        if (finalText !in observations || observations.none { it != finalText && finalText.startsWith(it) }) return false
+        return partials.all { text -> CommandSafety.blockedReason(text) == null && !highRisk.containsMatchIn(text) &&
+            (finalText.startsWith(PlaceText.normalize(text)) || literalKey(text) == best.semanticKey) }
     }
     fun resolve(result: SpeechRecognitionResult, context: SpeechContext): ResolvedTranscript {
         val hypotheses = result.hypotheses.filter { it.text.isNotBlank() && it.text.length <= 1000 }.sortedBy { it.rank }
@@ -132,8 +169,12 @@ class ContextualTranscriptResolver {
             best.evidence.any { reason -> reason.startsWith("KNOWN_") || reason == "REGISTERED_TOOL_PHRASE" } &&
             (best.score - it.score <= .11f || (best.acousticConfidence != null && it.acousticConfidence != null &&
                 kotlin.math.abs(best.acousticConfidence!! - it.acousticConfidence!!) <= .12f)) }
-        val minimum = when { risky -> .88f; originalFrame?.kind == SpeechEntityKind.APP -> .25f; else -> .45f }
-        val low = (risky && best.acousticConfidence == null) || best.acousticConfidence?.let { it < minimum } == true
+        // A literal, reversible navigation request needs the same threshold as app opening.
+        // This never relaxes destination substitution, competing entities, or sensitive actions.
+        val literalNavigation = !best.generated && originalFrame?.kind == SpeechEntityKind.PLACE &&
+            NavigationLanguage.simpleEnding(originalFrame.suffix)
+        val minimum = when { risky -> .88f; originalFrame?.kind == SpeechEntityKind.APP || literalNavigation -> .25f; else -> .45f }
+        val acousticLow = (risky && best.acousticConfidence == null) || best.acousticConfidence?.let { it < minimum } == true
         val riskyCompetition = risky && hypotheses.drop(1).any { other ->
             PlaceText.normalize(other.text) != PlaceText.normalize(original) &&
                 (hypotheses.first().acousticConfidence == null || other.acousticConfidence == null ||
@@ -155,13 +196,17 @@ class ContextualTranscriptResolver {
         }
         val safetyCompetition = uncertainAlternatives.any { CommandSafety.blockedReason(it.text) != null }
         val ambiguous = originalEntities.map { it.id }.distinct().size > 1 || collision.isNotEmpty() || riskyCompetition || entityCompetition || safetyCompetition
+        val corroboratedZero = !ambiguous && !risky && literalNavigation && corroboratedNativeZero(result, context, hypotheses, best)
+        val low = acousticLow && !corroboratedZero
         val alternatives = (listOf(best) + collision).distinctBy { it.semanticKey }.take(3)
         val prompt = if (ambiguous && alternatives.size > 1) alternatives.joinToString(" / ") { it.text } + " 중 어느 명령인가요?"
             else if (ambiguous) hypotheses.take(3).joinToString(" / ") { it.text } + " 중 어느 명령인가요?"
             else if (low) "잘 구분하지 못했어요. '${best.text}' 명령을 다시 말해 주세요." else ""
         return ResolvedTranscript(hypotheses, if (ambiguous || low) original else best.text,
             !ambiguous && !low && clean(best.text) != original, best.acousticConfidence,
-            best.evidence + if (ambiguous) listOf("COMPETING_ENTITY_OR_ACTION") else if (low) listOf("LOW_ACOUSTIC_CONFIDENCE") else emptyList(),
+            best.evidence + (if (literalNavigation) listOf("LITERAL_REVERSIBLE_NAVIGATION") else emptyList()) +
+                (if (corroboratedZero) listOf("NATIVE_ZERO_WITH_STABLE_LITERAL", "PARTIAL_FINAL_AGREEMENT") else emptyList()) +
+                if (ambiguous) listOf("COMPETING_ENTITY_OR_ACTION") else if (low) listOf("LOW_ACOUSTIC_CONFIDENCE") else emptyList(),
             ranked.take(8), ambiguous || low, prompt)
     }
 }

@@ -20,6 +20,11 @@ object SpeechVocabulary {
             SpeechEntity(it.id, SpeechEntityKind.PLACE, it.canonicalName, it.aliases.take(8), "USER_PLACE")
         }
         val slots = PlaceSlots.aliases.map { (id, names) -> SpeechEntity(id, SpeechEntityKind.PLACE, names.first(), names.drop(1), "SUPPORTED_PLACE_SLOT") }
+            .filter { slot -> local.none { place ->
+                (listOf(place.name) + place.aliases).any { alias ->
+                    (listOf(slot.name) + slot.aliases).any { supported -> PlaceText.variants(alias).any { it in PlaceText.variants(supported) } }
+                }
+            } }
         val places = (local + slots).groupBy { it.id }.map { (_, entries) -> entries.first().copy(
             aliases = entries.flatMap { listOf(it.name) + it.aliases }.distinct().filter { it != entries.first().name }) }.take(8)
         val music = graph.settings.get("music_package")

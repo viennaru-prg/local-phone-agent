@@ -121,4 +121,82 @@ class ContextualTranscriptResolverTest {
         val fixed = resolver.resolve(result("집으로 가자" to .75f, "집으로 가지 마" to .73f), context)
         assertTrue(fixed.requiresClarification)
     }
+    @Test fun spacedAuxiliaryVerbsAndSynonymousEndingsPreserveOneNavigationIdentity() {
+        for (ending in listOf("안내해 줘", "안내 해 줘", "길 안내해 줘", "안내해 주세요")) {
+            val text = "회사로 $ending"
+            val fixed = resolver.resolve(result(text to .72f, "회사로 안내해줘" to .71f, "회사로 가 줘" to .7f), context)
+            assertFalse(text, fixed.requiresClarification)
+            assertEquals(text, fixed.selectedText)
+            assertEquals(listOf(Action.Navigate("회사로")), BasicCommandPlanner.parse(text).actions)
+            assertEquals(1, fixed.candidates.size)
+        }
+    }
+    @Test fun literalReversibleNavigationUsesLowerGateWithoutRegistrationDependency() {
+        for (text in listOf("회사로 안내해 줘", "대전역으로 안내해 줘")) {
+            val fixed = resolver.resolve(result(text to .35f, text.replace("해 줘", "해줘") to .34f), SpeechContext())
+            assertFalse(fixed.requiresClarification)
+            assertTrue(fixed.evidence.contains("LITERAL_REVERSIBLE_NAVIGATION"))
+        }
+        assertTrue(resolver.resolve(result("회사로 안내해 줘" to .2f), context).requiresClarification)
+    }
+    @Test fun lowerNavigationGateDoesNotEraseCompetingDestinationsOrGenerateCorrection() {
+        assertTrue(resolver.resolve(result("회사로 안내해 줘" to .35f, "집으로 안내해 줘" to .34f), context).requiresClarification)
+        val unknown = resolver.resolve(result("지브로 안내해 줘" to .35f), context)
+        assertEquals("지브로 안내해 줘", unknown.selectedText)
+        assertFalse(unknown.correctionApplied)
+    }
+    @Test fun spokenClarificationUsesEntityAndActionRatherThanIdenticalWording() {
+        val question = resolver.resolve(result("회사로 가자" to .72f, "집으로 가자" to .70f), context)
+        assertTrue(question.requiresClarification)
+        val answer = resolver.resolve(result("회사로 안내해 주세요" to .9f), context)
+        assertEquals("PLACE:office:NAVIGATE", TranscriptSelection.select(question.candidates, answer)?.semanticKey)
+        assertNull(TranscriptSelection.select(question.candidates, question))
+        val unrelated = resolver.resolve(result("공장으로 안내해 줘" to .9f), context)
+        assertNull(TranscriptSelection.select(question.candidates, unrelated))
+        val clearAnswer = resolver.resolve(result("회사로 안내해 주세요" to .95f, "집으로 가자" to .6f), context)
+        assertFalse(clearAnswer.requiresClarification)
+        assertEquals("PLACE:office:NAVIGATE", TranscriptSelection.select(question.candidates, clearAnswer)?.semanticKey)
+    }
+    private fun nativeZero(text: String = "회사로 안내해 줘", partials: List<String> = listOf(
+        "회사", "회사로", "회사로 안", "회사로 안내", text, text, text)) = SpeechRecognitionResult(
+        listOf(SpeechHypothesis(text, 0f, 0)),
+        partials.mapIndexed { index, value -> SpeechPartial(listOf(SpeechHypothesis(value, null, 0)),
+            if (index == 0) 2043 else if (index == 1) 2675 else 2676) },
+        engine = "android-native-on-device", onDevice = true, readyLatencyMs = 116, audioDurationMs = 3202,
+        finalLatencyMs = 0, totalLatencyMs = 3318, biasCount = 24)
+    @Test fun nativeZeroWithReportedConvergingPartialsReachesLiteralNavigationWithoutInflatingConfidence() {
+        val fixed = resolver.resolve(nativeZero(), context)
+        assertFalse(fixed.requiresClarification); assertEquals("회사로 안내해 줘", fixed.selectedText)
+        assertEquals(0f, fixed.confidence!!, 0f); assertFalse(fixed.correctionApplied)
+        assertEquals("PLACE:office:NAVIGATE", fixed.candidates.single().semanticKey)
+        assertTrue(fixed.evidence.contains("NATIVE_ZERO_WITH_STABLE_LITERAL"))
+        assertTrue(fixed.evidence.contains("PARTIAL_FINAL_AGREEMENT"))
+    }
+    @Test fun corroboratedLiteralZeroDoesNotRequireAnyRegisteredPlace() {
+        val fixed = resolver.resolve(nativeZero("대전역으로 안내해 줘", listOf("대전역", "대전역으로", "대전역으로 안내해 줘")), SpeechContext())
+        assertFalse(fixed.requiresClarification); assertEquals("대전역으로 안내해 줘", fixed.selectedText)
+        assertFalse(fixed.correctionApplied); assertEquals(0f, fixed.confidence!!, 0f)
+    }
+    @Test fun zeroWithoutProgressionOrWithConflictingPartialsStillAsks() {
+        for (partials in listOf(emptyList(), listOf("회사로 안내해 줘", "회사로 안내해 줘"),
+            listOf("회사", "집으로 안내해 줘", "회사로 안내해 줘"),
+            listOf("회사", "회사로 가지 마", "회사로 안내해 줘"))) {
+            assertTrue(resolver.resolve(nativeZero(partials = partials), context).requiresClarification)
+        }
+    }
+    @Test fun nativeZeroDoesNotEraseNBestCollisionOrSharedAlias() {
+        val recognition = nativeZero().copy(hypotheses = listOf(SpeechHypothesis("회사로 안내해 줘", 0f, 0),
+            SpeechHypothesis("집으로 안내해 줘", 0f, 1)))
+        assertTrue(resolver.resolve(recognition, context).requiresClarification)
+        assertTrue(resolver.resolve(nativeZero(), context.copy(entities = context.entities +
+            SpeechEntity("other-office", SpeechEntityKind.PLACE, "다른 지사", listOf("회사")))).requiresClarification)
+    }
+    @Test fun corroborationDoesNotAuthorizeSensitiveActionsOrNonNativeSources() {
+        val sensitive = nativeZero("엄마에게 문자 보내줘", listOf("엄마", "엄마에게", "엄마에게 문자 보내줘"))
+        assertTrue(resolver.resolve(sensitive, context).requiresClarification)
+        for (recognition in listOf(nativeZero().copy(engine = "OTHER"), nativeZero().copy(onDevice = false),
+            nativeZero().copy(source = "AUDIO_FILE"), nativeZero().copy(finalResult = false))) {
+            assertTrue(resolver.resolve(recognition, context).requiresClarification)
+        }
+    }
 }

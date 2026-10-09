@@ -20,7 +20,11 @@ import org.json.JSONObject
 import org.json.JSONArray
 import java.util.UUID
 
-/** One-shot Korean recognition. Prefers the on-device recognizer; never sends audio anywhere itself. */
+/**
+ * One-shot Korean recognition. Online, the system's default recognizer (Google) recognizes on its
+ * servers: the on-device Korean model misheard names ("일요모임" → "이름 모임", "수요모임" → "수유 모임").
+ * Offline, or when the network fails, the on-device recognizer listens instead.
+ */
 class Listener(private val context: Context, private val onPartial: (String) -> Unit, private val onReady: () -> Unit) {
     private var recognizer: SpeechRecognizer? = null
     private var generation = 0
@@ -30,13 +34,26 @@ class Listener(private val context: Context, private val onPartial: (String) -> 
         data class Error(val message: String) : Result
     }
 
-    fun start(done: (Result) -> Unit) {
+    private fun online(): Boolean = runCatching {
+        val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+        cm.getNetworkCapabilities(cm.activeNetwork)?.let {
+            it.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                it.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        } == true
+    }.getOrDefault(false)
+
+    private fun onDeviceAvailable() = android.os.Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+
+    fun start(done: (Result) -> Unit) = start(preferOnline = true, done = done)
+
+    private fun start(preferOnline: Boolean, done: (Result) -> Unit) {
         stop()
         val id = ++generation
         val started = SystemClock.elapsedRealtime()
         var readyMs: Long? = null; var endedMs: Long? = null; var partials = 0
-        val onDevice = android.os.Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
-        val r = if (android.os.Build.VERSION.SDK_INT >= 31 && onDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(context) else SpeechRecognizer.createSpeechRecognizer(context)
+        val useOnline = preferOnline && online()
+        val onDevice = !useOnline && onDeviceAvailable()
+        val r = if (onDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(context) else SpeechRecognizer.createSpeechRecognizer(context)
         recognizer = r
         var finished = false
         fun finish(result: Result) { if (!finished && id == generation) { finished = true; done(result) } }
@@ -44,7 +61,7 @@ class Listener(private val context: Context, private val onPartial: (String) -> 
             override fun onReadyForSpeech(params: Bundle?) {
                 if (id != generation || finished) return
                 readyMs = SystemClock.elapsedRealtime() - started
-                Log.i("AgentVoice", "ASR ready ${readyMs}ms onDevice=$onDevice"); onReady()
+                Log.i("AgentVoice", "ASR ready ${readyMs}ms onDevice=$onDevice online=$useOnline"); onReady()
             }
             override fun onBeginningOfSpeech() {}
             override fun onRmsChanged(rmsdB: Float) {}
@@ -60,7 +77,7 @@ class Listener(private val context: Context, private val onPartial: (String) -> 
                 val hypotheses = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
                 val scores = results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)
                 val text = hypotheses.firstOrNull()?.trim().orEmpty()
-                val details = JSONObject().put("engine", if (onDevice) "android-on-device" else "android-default")
+                val details = JSONObject().put("engine", if (onDevice) "android-on-device" else if (useOnline) "google-online" else "android-default")
                     .put("onDevice", onDevice).put("readyMs", readyMs).put("captureAndRecognitionMs", SystemClock.elapsedRealtime() - started)
                     .put("endOfSpeechMs", endedMs).put("partialCount", partials).put("hypotheses", JSONArray().apply {
                         hypotheses.forEachIndexed { rank, value -> put(JSONObject().put("text", value).put("confidence", scores?.getOrNull(rank)).put("rank", rank)) }
@@ -68,7 +85,19 @@ class Listener(private val context: Context, private val onPartial: (String) -> 
                 Log.i("AgentVoice", "ASR final=$text confidence=${scores?.firstOrNull()} partials=$partials")
                 finish(if (text.isEmpty()) Result.Error("말씀을 알아듣지 못했어요.") else Result.Text(text, details))
             }
-            override fun onError(error: Int) = finish(Result.Error(when (error) {
+            override fun onError(error: Int) {
+                // The network dropped: listen again with the on-device recognizer rather than fail.
+                if (useOnline && id == generation && !finished && onDeviceAvailable() && error in setOf(
+                        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT, SpeechRecognizer.ERROR_SERVER,
+                        11 /* ERROR_SERVER_DISCONNECTED */, 10 /* ERROR_TOO_MANY_REQUESTS */)) {
+                    Log.w("AgentVoice", "online ASR error $error, retrying on-device")
+                    onPartial("인터넷이 불안정해 기기에서 다시 들을게요. 다시 말씀해 주세요.")
+                    start(preferOnline = false, done = done)
+                    return
+                }
+                onErrorResult(error)
+            }
+            fun onErrorResult(error: Int) = finish(Result.Error(when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "말씀을 알아듣지 못했어요."
                 SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "마이크 권한이 필요해요."
                 SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE, SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED -> "기기에 한국어 음성 인식 모델이 없어요."
@@ -79,7 +108,7 @@ class Listener(private val context: Context, private val onPartial: (String) -> 
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, onDevice)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
             // Names the user says to this assistant (saved places, app names): "일요모임" was heard as "이름 모임".
             if (android.os.Build.VERSION.SDK_INT >= 33)

@@ -183,7 +183,9 @@ class Assistant(
         return when (route) {
             is Route.Navigate -> tools.navigate(route.place)?.let { AgentResult(Outcome.DONE, it, emptyList()) }
                 ?: agent.run(goal) // deep link failed: fall back to operating the map on screen
-            is Route.Media -> tools.media(route.key)?.let { AgentResult(Outcome.DONE, it, emptyList()) } ?: agent.run(goal)
+            // The key was sent but not confirmed: the screen agent finishes it, knowing a key already went out.
+            is Route.Media -> tools.media(route.key)?.let { AgentResult(Outcome.DONE, it, emptyList()) }
+                ?: agent.run(goal, listOf(HistoryLine("media ${route.key.name.lowercase()}", "키 전송, 확인 전")))
             Route.Screen -> {
                 if (Router.isNavigationGoal(goal) && Router.usesNaver(goal)) {
                     val opened = tools.prepareNavigation()

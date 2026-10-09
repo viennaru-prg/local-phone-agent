@@ -120,7 +120,16 @@ object GoalText {
      * "클립스트림에서 아이유 좋은날 재생목록에 추가해줘" -> "아이유 좋은날": the song to search and add to
      * the current playlist. Null for anything that is not "<song> (재생목록에) 추가/넣어/담아 줘".
      */
-    fun playlistAdd(goal: String): String? {
+    /**
+     * A playlist command says so ("재생목록", "노래", "곡", "음악") or names the music app; "장바구니에
+     * 넣어줘" or "알람 삭제해줘" are not about songs.
+     */
+    fun aboutMusic(goal: String): Boolean =
+        Regex("재생\\s*목록|플레이\\s*리스트|노래|곡|음악|playlist|song", RegexOption.IGNORE_CASE).containsMatchIn(goal) ||
+            namedApp(goal)?.let { app -> AppProfiles.forRole("music")?.names?.any { n -> normalize(n) == normalize(app) || soundsLike(app, n) } } == true
+
+    fun playlistAdd(goal: String, inPlayer: Boolean = false): String? {
+        if (!inPlayer && !aboutMusic(goal)) return null
         val g = goal.trim().let { if (namedApp(it) != null) it.substringAfter("에서").trim() else it }
         val m = Regex("^(.+?)\\s*(?:(?:현재\\s*)?(?:재생\\s*목록|플레이\\s*리스트)\\s*에?\\s*)?(?:추가|넣어|담아)\\s*(?:해\\s*)?(?:줘|주세요|줄래)?\\s*[.!?]?$")
             .matchEntire(g) ?: return null
@@ -152,7 +161,8 @@ object GoalText {
     }
 
     /** "클립스트림에서 아이유 좋은날 재생목록에서 빼줘" -> "아이유 좋은날": the song to take out of the playlist. */
-    fun playlistRemove(goal: String): String? {
+    fun playlistRemove(goal: String, inPlayer: Boolean = false): String? {
+        if (!inPlayer && !aboutMusic(goal)) return null
         // "아이유 좋은날 재생목록에서 빼줘": that "…에서" names the playlist, not an app.
         val app = namedApp(goal)?.takeIf { !Regex("재생\\s*목록|플레이\\s*리스트").containsMatchIn(it) }
         val g = goal.trim().let { if (app != null) it.substringAfter("에서").trim() else it }

@@ -99,8 +99,18 @@ object ScreenCompactor {
             }
             return true
         }
+        // Painter's order: a scrolling list drawn later covers whatever earlier nodes report inside its box.
+        // A WebView keeps a collapsed panel's rows in the tree (ClipStream's old search results lay "under"
+        // its playlist and filled the element budget, so scrolling the playlist looked like no change).
+        val scrollers = nodes.indices.filter { nodes[it].scrollable && !nodes[it].bounds.empty }
+        fun isAncestor(a: Int, of: Int): Boolean { var p = nodes[of].parent; while (p in nodes.indices) { if (p == a) return true; p = nodes[p].parent }; return false }
+        fun covered(index: Int): Boolean {
+            val b = nodes[index].bounds
+            return scrollers.any { s -> s > index && !isAncestor(index, s) && !isAncestor(s, index) &&
+                nodes[s].bounds.let { box -> b.centerY in box.top..box.bottom && b.centerX in box.left..box.right } }
+        }
         fun visible(n: RawNode, index: Int) = !n.bounds.empty && n.bounds.right > 0 && n.bounds.bottom > 0 &&
-            n.bounds.left < snapshot.width && n.bounds.top < snapshot.height && insideScrollers(index)
+            n.bounds.left < snapshot.width && n.bounds.top < snapshot.height && insideScrollers(index) && !covered(index)
         // A clickable container covering much of the screen is a panel, not a row: its texts stay separate.
         val panelArea = snapshot.width.toLong() * snapshot.height * 3 / 10
         fun isPanel(n: RawNode) = n.bounds.width.toLong() * n.bounds.height >= panelArea
@@ -149,7 +159,20 @@ object ScreenCompactor {
         val unique = deduped.map { d ->
             if (d.label !in repeated) return@map d
             val b = nodes[d.node].bounds
-            val texts = deduped.filter { t -> t.kind == Kind.TEXT && nodes[t.node].bounds.centerY in b.top..b.bottom && nodes[t.node].bounds.right <= b.right }
+            fun inBand(t: Draft) = t.kind == Kind.TEXT && nodes[t.node].bounds.centerY in b.top..b.bottom && nodes[t.node].bounds.right <= b.right
+            // The row's own container first: the nearest ancestor (up to 3 levels) holding text. A band of
+            // the screen mixed in another row's title in ClipStream's WebView ("아이유" beside a different song).
+            fun under(ancestor: Int, i: Int): Boolean { var p = nodes[i].parent; while (p in nodes.indices) { if (p == ancestor) return true; p = nodes[p].parent }; return false }
+            var container = nodes[d.node].parent
+            var own = emptyList<Draft>()
+            repeat(3) {
+                // A row container holds this one button only; one holding its siblings is the whole list.
+                if (own.isEmpty() && container in nodes.indices && deduped.none { o -> o !== d && o.label == d.label && under(container, o.node) }) {
+                    own = deduped.filter { t -> t.kind == Kind.TEXT && under(container, t.node) }
+                    if (own.isEmpty()) container = nodes[container].parent
+                }
+            }
+            val texts = (own.ifEmpty { deduped.filter(::inBand) })
                 .sortedWith(compareBy({ nodes[it.node].bounds.top }, { nodes[it.node].bounds.left })).joinToString(" ") { it.label }
             // No loose text beside it ("삭제" next to a row button that holds its own title): name it after that row.
             val row = texts.ifBlank {
@@ -166,6 +189,9 @@ object ScreenCompactor {
             focused.isNotEmpty() && GoalText.matches(d.label + " " + d.value, focused) -> -1
             relevant.isNotEmpty() && GoalText.matches(d.label + " " + d.value, relevant) -> 0
             d.kind == Kind.INPUT || d.kind == Kind.SWITCH -> 1
+            // Controls in the fixed bars (player transport, bottom tabs, top app bar) define the screen;
+            // a long list must not push them out (ClipStream lost 이전 곡/일시정지/다음 곡 this way).
+            d.kind != Kind.TEXT && d.kind != Kind.LIST && zone(nodes[d.node].bounds, snapshot.height).isNotEmpty() -> 1
             d.kind == Kind.BUTTON || nodes[d.node].selected -> 2
             d.kind != Kind.TEXT -> 3
             else -> 4

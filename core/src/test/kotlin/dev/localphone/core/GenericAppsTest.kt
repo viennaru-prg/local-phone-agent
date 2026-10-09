@@ -17,8 +17,13 @@ private class OtherPlayer(private val scope: TestScope, private val selectFirst:
     var selected = ""
     var nowPlaying = ""
     var playing = false
+    var onMap = false
+    val opened = mutableListOf<String>()
     val pkg = if (selectFirst) "com.example.selectfirst" else "com.example.tapplays"
     override suspend fun observe(): Snapshot {
+        if (onMap) return Snapshot("com.nhn.android.nmap", "네이버지도", listOf(RawNode("r", -1, bounds = Bounds(0, 0, 1080, 2340)),
+            RawNode("r.0", 0, scrollable = true, bounds = Bounds(0, 1500, 1080, 2000)),
+            RawNode("r.0.0", 1, text = "이 주변 많이 찾는 장소 아이유 카페", clickable = true, className = "android.widget.Button", bounds = Bounds(40, 1550, 1040, 1700))), 1080, 2340)
         val n = mutableListOf(RawNode("r", -1, bounds = Bounds(0, 0, 1080, 2340)))
         playlist.forEachIndexed { i, t ->
             val top = 300 + i * 200
@@ -46,7 +51,7 @@ private class OtherPlayer(private val scope: TestScope, private val selectFirst:
         }
         return true
     }
-    override suspend fun openApp(name: String) = OpenAppResult(true, "이미 열려 있음")
+    override suspend fun openApp(name: String): OpenAppResult { opened += name; onMap = false; return OpenAppResult(true, "열림: $name") }
     override suspend fun media(key: MediaKey) = false
     override fun musicActive() = playing
     override fun now() = scope.testScheduler.currentTime
@@ -91,6 +96,15 @@ class GenericAppsTest {
         assertEquals(Outcome.DONE, result.outcome, log)
         assertEquals(listOf("Woody - 어제보다 슬픈 오늘", "야다 - 이미 슬픈 사랑"), phone.playlist, log)
         assertEquals("button", AppProfiles.forPackage(phone.pkg).rowDelete)
+    }
+
+    @Test fun aPlaylistCommandFromAnotherAppOpensTheMusicAppFirst() = runTest {
+        val phone = OtherPlayer(this, selectFirst = false).apply { onMap = true }
+        val result = agent(phone).run("더 크로스 재생목록에서 빼줘")
+        val log = result.history.joinToString("\n")
+        assertEquals(listOf("클립스트림"), phone.opened, log)
+        assertEquals(Outcome.DONE, result.outcome, log)
+        assertEquals(2, phone.playlist.size, log)
     }
 
     @Test fun profilesComeFromData() {

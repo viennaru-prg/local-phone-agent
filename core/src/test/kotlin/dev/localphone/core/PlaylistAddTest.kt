@@ -68,7 +68,7 @@ private class FakeClipStream(private val scope: TestScope) : Phone {
 class PlaylistAddTest {
     @Test fun goalsNameTheSong() {
         assertEquals("아이유 좋은날", GoalText.playlistAdd("클립스트림에서 아이유 좋은날 재생목록에 추가해줘"))
-        assertEquals("아이유 좋은날", GoalText.playlistAdd("아이유 좋은날 추가해줘"))
+        assertEquals("아이유 좋은날", GoalText.playlistAdd("아이유 좋은날 추가해줘", inPlayer = true)); assertEquals(null, GoalText.playlistAdd("새 대상을 목록에 넣어줘"))
         assertEquals("좋은날", GoalText.playlistAdd("좋은날 노래 플레이리스트에 넣어줘"))
         assertEquals("아이유 좋은날", GoalText.playlistAdd("아이유 좋은날을 재생목록에 담아줘"))
         assertEquals(null, GoalText.playlistAdd("회사로 안내해줘"))
@@ -122,6 +122,15 @@ class PlaylistAddTest {
         val log = result.history.joinToString("\n")
         assertEquals(2, phone.playlist.size, log)
         assertTrue(result.history.any { it.action == "click \"검색\"" }, "the new query was searched\n$log")
+    }
+
+    @Test fun aSongAlreadyShownPlayingWaitsForAudioInsteadOfAskingTheModel() = runTest {
+        val phone = FakeClipStream(this).apply { nowPlaying = "더 크로스 - 당신을 위하여"; playing = true }
+        val view = ScreenCompactor.compact(phone.observe(), "더 크로스 틀어줘")
+        val history = listOf(HistoryLine("double_tap \"더 크로스 - 당신을 위하여\"", "화면 바뀜"))
+        assertTrue(Harness.isPlayer(view), view.render())
+        assertTrue(Harness.nowPlaying("더 크로스", view), view.render())
+        assertEquals(AgentAction.Wait, Harness.preDecide("더 크로스 틀어줘", view, history)?.action, view.render())
     }
 
     @Test fun aSongNotInThePlaylistIsAddedThenPlayed() = runTest {

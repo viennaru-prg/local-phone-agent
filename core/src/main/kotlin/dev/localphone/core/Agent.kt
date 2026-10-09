@@ -107,7 +107,7 @@ class Agent(
     }
 
     private suspend fun verify(goal: String, run: Run, view: ScreenView, answer: String = ""): Verdict {
-        mediaEvidence(goal, run)?.let { return Verdict(true, it) }
+        mediaEvidence(goal, run, view)?.let { return Verdict(true, it) }
         playlistEvidence(goal, run, view)?.let { return Verdict(true, it) }
         GoalText.playSong(goal)?.let { q ->
             if (Harness.nowPlaying(q, view) && phone.musicActive() != false) {
@@ -117,6 +117,10 @@ class Agent(
         }
         if (Harness.guidanceEnded(goal, view, run.history)) return Verdict(true, "길안내를 종료했어요.")
         if (Router.mediaKeyIn(goal) != null && phone.musicActive() != null) return Verdict(false, "음악 상태가 아직 요청과 다름")
+        // These goals have hard evidence above (player bar + audio, the row gone or added). Without it they
+        // are not done yet; a model verdict on a crowded player screen only cost 30 s and a timeout.
+        if (GoalText.playSong(goal) != null) return Verdict(false, "재생 막대와 오디오가 아직 요청한 곡이 아님")
+        if (GoalText.playlistAdd(goal, Harness.isPlayer(view)) != null || GoalText.playlistRemove(goal, Harness.isPlayer(view)) != null) return Verdict(false, "재생목록 변경이 아직 확인되지 않음")
         navigation?.let {
             val evidence = it.observe(view)
             return Verdict(evidence.complete, if (evidence.complete) it.spokenStart else evidence.reason)
@@ -160,13 +164,13 @@ class Agent(
      */
     private fun playlistEvidence(goal: String, run: Run, view: ScreenView): String? {
         fun obj(q: String) = q + if (q.last() in '가'..'힣' && (q.last() - '가') % 28 != 0) "을" else "를"
-        GoalText.playlistAdd(goal)?.let { query ->
+        GoalText.playlistAdd(goal, Harness.isPlayer(view))?.let { query ->
             val added = Harness.addedRows(query, run.history)
             val count = GoalText.playlistAddCount(goal)
             if (added.isEmpty() || (added.size < count && Harness.preDecide(goal, view, run.history) != null)) return null
             return if (count == 1) "${obj(query)} 재생목록에 추가했어요." else "$query 노래 ${added.size}곡을 재생목록에 추가했어요."
         }
-        val query = GoalText.playlistRemove(goal) ?: return null
+        val query = GoalText.playlistRemove(goal, Harness.isPlayer(view)) ?: return null
         // Removed = the row whose end icon was tapped is no longer on screen.
         val row = Harness.removedRow(query, run.history) ?: return null
         if (view.elements.any { it.label == row }) return null
@@ -174,10 +178,19 @@ class Agent(
         return "${obj(query)} 재생목록에서 뺐어요."
     }
 
-    private fun mediaEvidence(goal: String, run: Run): String? {
+    private fun mediaEvidence(goal: String, run: Run, view: ScreenView? = null): String? {
         val key = Router.mediaKeyIn(goal) ?: return null
+        val pressed = run.history.any { (it.action.startsWith("click") && it.outcome.contains("바뀜")) || it.action.startsWith("media") }
+        // A player on screen shows its own state; the system audio flag lags for Secure Folder apps
+        // (paused by the key, still "active" for seconds, so the model pressed 재생 and Repeat).
+        view?.let { Harness.playerState(it) }?.let { playing ->
+            when (key) {
+                MediaKey.PLAY -> if (playing) return "음악을 재생했어요."
+                MediaKey.PAUSE -> if (!playing) return if (pressed) "음악을 멈췄어요." else "지금 재생 중인 음악이 없어요."
+                else -> {}
+            }
+        }
         val active = phone.musicActive() ?: return null
-        val pressed = run.history.any { it.action.startsWith("click") && it.outcome.contains("바뀜") }
         return when (key) {
             MediaKey.PLAY -> if (active) "음악을 재생했어요." else null
             MediaKey.PAUSE -> if (!active) (if (pressed) "음악을 멈췄어요." else "지금 재생 중인 음악이 없어요.") else null
@@ -229,7 +242,10 @@ class Agent(
         }
         // "늙은 사랑 틀어줘" names no app: songs are played in the user's player.
         val musicApp = config.musicApp ?: AppProfiles.appFor("music")
-        if (musicApp != null && GoalText.playSong(goal) != null && GoalText.namedApp(goal) == null && !Harness.isPlayer(view) && !appInFront(view, musicApp)) {
+        // Song and playlist commands that name no app happen in the user's player, not on whatever is in front
+        // ("재생목록에서 빼줘" once scrolled NAVER Map's lists).
+        val musicGoal = GoalText.playSong(goal) != null || GoalText.playlistAdd(goal) != null || GoalText.playlistRemove(goal) != null
+        if (musicApp != null && musicGoal && GoalText.namedApp(goal) == null && !Harness.isPlayer(view) && !appInFront(view, musicApp)) {
             val (outcome, next) = execute(run, AgentAction.OpenApp(musicApp), view)
             listener.step(StepRecord(0, "android_api", "", "", "open_app \"$musicApp\"", outcome, "곡 재생은 음악 앱에서", 0, phone.now() - started))
             view = next
@@ -267,7 +283,7 @@ class Agent(
                 listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "재생목록 변경(추가·삭제) 확인", 0, phone.now() - started))
                 return finish(run, goal, say)
             }
-            mediaEvidence(goal, run)?.let { say ->
+            mediaEvidence(goal, run, view)?.let { say ->
                 listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "시스템 오디오 상태 확인", 0, phone.now() - started))
                 return finish(run, goal, say)
             }
@@ -436,7 +452,9 @@ class Agent(
         }
         if (!finishing) return null
         // The harness already knows the next step (search pressed → add the result): no verifier call.
-        if (Harness.preDecide(goal, next, run.history) != null && (GoalText.playlistAdd(goal) ?: GoalText.playlistRemove(goal) ?: GoalText.playSong(goal)) != null) return null
+        // Goals with hard evidence (song in the player bar, row added/gone) are judged at the loop top:
+        // no verifier call and no "전체 목표 검증" line in between the harness steps.
+        if ((GoalText.playlistAdd(goal, Harness.isPlayer(next)) ?: GoalText.playlistRemove(goal, Harness.isPlayer(next)) ?: GoalText.playSong(goal)) != null) return null
         // For an atomic termination the model selected the terminating operation. Its actual
         // disappeared control and changed screen are the postcondition; a second planner must not
         // start exploring the normal screen again. Compound goals still use whole-goal verification.
@@ -712,6 +730,12 @@ object Guard {
     private val create = Regex("^(?:등록|수정)$|만들기|생성|새로\\s*만들|이름\\s*변경|편집|\\bcreate\\b|\\brename\\b|\\bedit\\b", RegexOption.IGNORE_CASE)
     fun blocked(goal: String, action: AgentAction, view: ScreenView): String? {
         if (action is AgentAction.Media && !Router.allowsMedia(goal)) return "명령에 없는 미디어 동작이라 실행하지 않음"
+        // Player modes the command did not ask about (the model cycled Repeat all → one → off on "음악 멈춰").
+        (action as? AgentAction.Click)?.let { view.element(it.id)?.label?.trim() }?.let { label ->
+            if (Regex("^(?:랜덤|셔플|shuffle|repeat.*|반복.*|key\\s*(?:up|down)|가사.*|속도.*|speed.*)$", RegexOption.IGNORE_CASE).matches(label) &&
+                !Regex("랜덤|셔플|shuffle|반복|repeat|키|key|가사|속도|speed", RegexOption.IGNORE_CASE).containsMatchIn(goal))
+                return "명령에 없는 재생 모드 버튼이라 누르지 않음"
+        }
         val id = when (action) {
             is AgentAction.Click -> action.id
             is AgentAction.LongClick -> action.id
@@ -730,7 +754,7 @@ object Guard {
         if (install.containsMatchIn(label) && !install.containsMatchIn(goal)) return "목표에 없는 설치·업데이트라 누르지 않음"
         // Deleting is allowed only when the user asked to remove something ("빼줘", "삭제해줘", ...).
         // Adding: only a result that names the requested song (the model once added a stale result).
-        (GoalText.playlistAdd(goal) ?: GoalText.playSong(goal))?.let { query ->
+        (GoalText.playlistAdd(goal, Harness.isPlayer(view)) ?: GoalText.playSong(goal))?.let { query ->
             val row = label.substringAfter(" · ", "")
             if (row.isNotEmpty() && Regex("추가|담기|add", RegexOption.IGNORE_CASE).containsMatchIn(label.substringBefore(" · ")) &&
                 !GoalText.rowMatches(query, row))

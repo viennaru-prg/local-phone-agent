@@ -5,6 +5,23 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class RowContextTest {
+    /** Rows with their own containers; another panel's text overlaps one row's band (WebView). */
+    @Test fun aRowsOwnContainerNamesItNotATextThatMerelySharesItsHeight() {
+        fun row(i: Int, title: String, top: Int) = listOf(
+            RawNode("r.0.$i", 1, bounds = Bounds(0, top - 20, 1080, top + 100)),
+            RawNode("r.0.$i.t", 2 + i * 3, text = title, bounds = Bounds(200, top, 800, top + 60)),
+            RawNode("r.0.$i.b", 2 + i * 3, desc = "현재 재생목록에 추가", clickable = true, className = "android.widget.Button",
+                bounds = Bounds(880, top - 20, 1000, top + 100)))
+        val nodes = listOf(
+            RawNode("r", -1, bounds = Bounds(0, 0, 1080, 2340)),
+            RawNode("r.0", 0, bounds = Bounds(0, 400, 1080, 1000)),
+        ) + row(0, "[Full HD Audio]IU - 좋은 날", 500) + row(1, "Good day (inst)", 700) +
+            listOf(RawNode("r.9", 0, text = "아이유 - 좋은날 1시간", bounds = Bounds(100, 510, 500, 550)))
+        val view = ScreenCompactor.compact(Snapshot("p", "P", nodes, 1080, 2340))
+        val adds = view.elements.filter { it.label.startsWith("현재 재생목록에 추가") }.map { it.label }
+        assertEquals(listOf("현재 재생목록에 추가 · [Full HD Audio]IU - 좋은 날", "현재 재생목록에 추가 · Good day (inst)"), adds, view.render())
+    }
+
     /** ClipStream search results: a clickable full-screen panel, each row a title and a "+" button. */
     @Test fun repeatedRowButtonsAreNamedAfterTheirRow() {
         fun row(i: Int, title: String, top: Int) = listOf(

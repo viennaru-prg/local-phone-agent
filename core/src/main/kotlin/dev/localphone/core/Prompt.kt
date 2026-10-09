@@ -157,7 +157,7 @@ char ::= [^"\\\x00-\x1F] | "\\" ["\\/bfnrt]
         }
 
     /** Characters of screen the model sees. ClipStream's results plus playlist overflowed the 3072-token context. */
-    const val MAX_SCREEN_CHARS = 2200
+    const val MAX_SCREEN_CHARS = 1600
 
     /** Drops plain text lines first, then cuts the tail, so a crowded screen still fits the context. */
     fun fit(screen: String): String {

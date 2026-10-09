@@ -8,6 +8,14 @@ import dev.localphone.core.Harness.Auto
  * way worked (see [Skills.learnFrom]).
  */
 object Skills {
+    private val realAction = Regex("^(?:click|double_tap|click_end|long_click|type|scroll|open_app|back|media|wait)\\b")
+
+    /** The last thing actually done on the screen (bookkeeping lines like "전체 목표 검증" are skipped). */
+    fun lastAction(history: List<HistoryLine>): HistoryLine? = history.lastOrNull { it.action != "wait" && realAction.containsMatchIn(it.action) }
+
+    /** Waits since the last real action. */
+    fun waitsSince(history: List<HistoryLine>): Int = history.takeLastWhile { it.action == "wait" || !realAction.containsMatchIn(it.action) }.count { it.action == "wait" }
+
     private val deleteLabel = Regex("^(?:삭제|제거|지우기|빼기|remove|delete)(?:$|\\s·)", RegexOption.IGNORE_CASE)
     private val menuLabel = Regex("메뉴|옵션|더\\s*보기|drawer|more\\s*options|overflow", RegexOption.IGNORE_CASE)
 
@@ -55,12 +63,15 @@ object Skills {
      */
     fun playRow(profile: AppProfile, row: Element, history: List<HistoryLine>): Auto? {
         val tapped = history.count { it.action == "click \"${row.label}\"" && !it.outcome.startsWith("실행 실패") }
-        val doubled = history.count { it.action == "double_tap \"${row.label}\"" }
+        val doubled = history.count { it.action == "double_tap \"${row.label}\"" && !it.outcome.startsWith("실행 실패") }
+        val tap = Auto(AgentAction.Click(row.id), "'${row.label.take(30)}' 줄을 눌러 재생")
+        val twice = Auto(AgentAction.DoubleTap(row.id), "'${row.label.take(30)}' 줄을 두 번 눌러 재생")
+        // The remembered way is only where to start: a tap that did not play escalates to two taps.
         return when {
-            profile.rowPlay == "double_tap" || (profile.rowPlay == null && tapped > 0) ->
-                if (doubled >= 2) null else Auto(AgentAction.DoubleTap(row.id), "'${row.label.take(30)}' 줄을 두 번 눌러 재생")
-            tapped >= 2 -> null
-            else -> Auto(AgentAction.Click(row.id), "'${row.label.take(30)}' 줄을 눌러 재생")
+            profile.rowPlay == "double_tap" -> if (doubled < 2) twice else if (tapped == 0) tap else null
+            tapped == 0 -> tap
+            doubled < 2 -> twice
+            else -> null
         }
     }
 
@@ -73,10 +84,10 @@ object Skills {
             e.enabled && e.kind != Kind.TEXT && deleteLabel.containsMatchIn(e.label.trim()) &&
                 e.bounds.centerY in row.bounds.top..row.bounds.bottom && e.id != row.id
         }?.let { control ->
-            if (history.count { it.action == "click \"${control.label}\"" } < 2)
+            if (history.count { it.action == "click \"${control.label}\"" && !it.outcome.startsWith("실행 실패") } < 2)
                 return Auto(AgentAction.Click(control.id), "'${row.label.take(30)}' 줄의 '${control.label.substringBefore(" · ")}' 버튼")
         }
-        if (history.count { it.action == "click_end \"${row.label}\"" } >= 2) return null
+        if (history.count { it.action == "click_end \"${row.label}\"" && !it.outcome.startsWith("실행 실패") } >= 2) return null
         return Auto(AgentAction.TapEnd(row.id), "'${row.label.take(30)}' 줄 끝의 삭제 아이콘")
     }
 
@@ -108,8 +119,12 @@ object Skills {
 
     /** Records how this app did it, so the next command goes straight to the working way. */
     fun learnFrom(packageName: String, history: List<HistoryLine>, query: String) {
-        history.lastOrNull { (it.action.startsWith("double_tap") || it.action.startsWith("click \"")) && GoalText.rowMatches(query, it.action) }?.let {
-            AppProfiles.learn(packageName, "rowPlay", if (it.action.startsWith("double_tap")) "double_tap" else "tap")
+        // Two taps anywhere in a successful run mean one was not enough (a later stray tap must not
+        // teach "tap": the model once re-pressed a row that two taps had already started).
+        val played = history.filter { !it.outcome.startsWith("실행 실패") && GoalText.rowMatches(query, it.action) }
+        when {
+            played.any { it.action.startsWith("double_tap") } -> AppProfiles.learn(packageName, "rowPlay", "double_tap")
+            played.any { it.action.startsWith("click \"") } -> AppProfiles.learn(packageName, "rowPlay", "tap")
         }
     }
 

@@ -29,7 +29,21 @@ class AndroidPhone(private val context: Context) : Phone {
             is AgentAction.Click -> node(action.id)?.let { s.click(snap, it, long = false) } ?: false
             is AgentAction.LongClick -> node(action.id)?.let { s.click(snap, it, long = true) } ?: false
             is AgentAction.Type -> node(action.id)?.let { s.setText(snap, it, action.text, action.enter) } ?: false
-            is AgentAction.Scroll -> s.scroll(snap, action.id?.let(::node) ?: view.lists.maxByOrNull { it.bounds.height * it.bounds.width }?.node, action.dir)
+            is AgentAction.Scroll -> {
+                val list = action.id?.let(::node) ?: view.lists.maxByOrNull { it.bounds.height * it.bounds.width }?.node
+                val ok = s.scroll(snap, list, action.dir)
+                // A swipe that moved nothing: try the list's own scroll action (WebView lists).
+                if (list != null) {
+                    delay(450)
+                    val after = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { s.observe() }
+                    // Compare the controls inside the list only: a playing track's clock changes every second.
+                    val box = snap.nodes[list].bounds
+                    fun rows(v: ScreenView) = v.elements.filter { it.kind != Kind.TEXT && it.bounds.centerY in box.top..box.bottom &&
+                        it.bounds.centerX in box.left..box.right }.map { it.label }
+                    if (after != null && rows(ScreenCompactor.compact(after)) == rows(view)) return s.scrollByAction(snap, list, action.dir) || ok
+                }
+                ok
+            }
             AgentAction.Back -> s.back()
             is AgentAction.TapEnd -> node(action.id)?.let { s.tapObserved(snap, it, trailing = true) } ?: false
             is AgentAction.DoubleTap -> node(action.id)?.let { s.tapObserved(snap, it) && run { delay(120); s.tapObserved(snap, it) } } ?: false

@@ -202,6 +202,26 @@ class AgentAccessibilityService : AccessibilityService() {
         return swipe(path.x1, path.y1, path.x2, path.y2)
     }
 
+    /**
+     * The list's own scroll action, for when a swipe moved nothing: some WebView lists (ClipStream's
+     * playlist) ignore injected gestures but scroll on the accessibility action.
+     */
+    fun scrollByAction(snapshot: Snapshot, index: Int, dir: ScrollDir): Boolean {
+        val node = live(snapshot, index) ?: return false
+        try {
+            val action = when (dir) {
+                ScrollDir.DOWN -> AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN
+                ScrollDir.UP -> AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP
+                ScrollDir.RIGHT -> AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT
+                ScrollDir.LEFT -> AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT
+            }
+            if (node.performAction(action.id)) return true
+            val fallback = if (dir == ScrollDir.DOWN || dir == ScrollDir.RIGHT) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+            return node.performAction(fallback)
+        } finally { node.recycleCompat() }
+    }
+
     fun back() = performGlobalAction(GLOBAL_ACTION_BACK)
     fun home() = performGlobalAction(GLOBAL_ACTION_HOME)
 

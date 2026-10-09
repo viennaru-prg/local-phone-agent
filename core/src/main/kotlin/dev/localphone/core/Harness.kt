@@ -201,7 +201,7 @@ object Harness {
 
     /** "<노래> 재생목록에서 빼줘": find the row naming the song and delete it the way this app deletes rows. */
     private fun playlistRemove(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
-        val query = GoalText.playlistRemove(goal) ?: return null
+        val query = GoalText.playlistRemove(goal, isPlayer(view)) ?: return null
         if (view.snapshot.home || removedRow(query, history) != null) return null
         return when (val found = Skills.findRow(query, view, history, maxScrolls = 6)) {
             is Skills.Found.Row -> Skills.deleteRow(AppProfiles.forPackage(view.snapshot.packageName), view, found.row, history)
@@ -211,7 +211,7 @@ object Harness {
     }
 
     private fun playlistAdd(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? =
-        GoalText.playlistAdd(goal)?.let { addFlow(it, GoalText.playlistAddCount(goal), view, history) }
+        GoalText.playlistAdd(goal, isPlayer(view))?.let { addFlow(it, GoalText.playlistAddCount(goal), view, history) }
 
     /** A music player screen: its previous/next and play/pause controls are on it. */
     fun isPlayer(view: ScreenView): Boolean {
@@ -235,6 +235,18 @@ object Harness {
     }
 
     /** The requested song is in the player bar and the pause control shows: it is playing. */
+    /**
+     * What the player on screen shows: true = playing (its pause control is offered), false = paused
+     * (play control offered), null = no player or both/neither shown.
+     */
+    fun playerState(view: ScreenView): Boolean? {
+        if (!isPlayer(view)) return null
+        val controls = view.elements.filter { it.enabled && (it.kind == Kind.BUTTON || it.kind == Kind.ITEM) }.map { it.label.trim() }
+        val pause = controls.any { pauseLabel.matches(it) }
+        val play = controls.any { playLabel.matches(it) }
+        return when { pause && !play -> true; play && !pause -> false; else -> null }
+    }
+
     fun nowPlaying(query: String, view: ScreenView): Boolean =
         barTitle(query, view) && view.elements.any { it.enabled && pauseLabel.matches(it.label.trim()) }
 
@@ -244,13 +256,18 @@ object Harness {
      */
     private fun playSong(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
         val query = GoalText.playSong(goal) ?: return null
-        if (!isPlayer(view) || nowPlaying(query, view)) return null
-        // The player bar updates a moment after the row is played: wait for it instead of asking the model.
-        val lastTap = history.lastOrNull { it.action != "wait" }
-        if (lastTap != null && (lastTap.action.startsWith("double_tap") || (lastTap.action.startsWith("click \"") && GoalText.rowMatches(query, lastTap.action))) &&
+        if (!isPlayer(view)) return null
+        // The bar already shows the song playing; the stream may need a moment before audio starts
+        // (the loop completes once the system reports music). Waiting beats a 30 s model call.
+        if (nowPlaying(query, view)) return if (Skills.waitsSince(history) < 5) Auto(AgentAction.Wait, "곡이 시작되어 소리가 날 때까지 기다림") else null
+        // The player bar updates a moment after the row (or its play control) is pressed: wait for it.
+        val lastTap = Skills.lastAction(history)
+        val pressedPlay = lastTap?.action?.let { a -> Regex("^click \"(.*)\"$").matchEntire(a)?.groupValues?.get(1)?.let { playLabel.matches(it.trim()) } } == true
+        if (lastTap != null && (lastTap.action.startsWith("double_tap") || pressedPlay ||
+                (lastTap.action.startsWith("click \"") && GoalText.rowMatches(query, lastTap.action))) &&
             !lastTap.outcome.startsWith("실행 실패")) {
             // Up to three short waits; then a single tap that only selected the row escalates (Skills.playRow).
-            if (history.takeLastWhile { it.action == "wait" }.size < 3) return Auto(AgentAction.Wait, "재생 막대가 바뀔 때까지 기다림")
+            if (Skills.waitsSince(history) < 3) return Auto(AgentAction.Wait, "재생 막대가 바뀔 때까지 기다림")
         }
         // Selected but paused: press play.
         if (barTitle(query, view)) view.elements.firstOrNull { it.enabled && playLabel.matches(it.label.trim()) }

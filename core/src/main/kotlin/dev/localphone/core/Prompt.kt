@@ -42,7 +42,8 @@ note는 판단을 아주 짧게 쓴다.
 """.trim()
 
     /** Same rules and examples without the "note" field, for the faster note-free answer format. */
-    val SYSTEM_NO_NOTE = SYSTEM.replace(Regex(",\"note\":\"[^\"]*\""), "").replace("note는 판단을 아주 짧게 쓴다.", "")
+    val SYSTEM_NO_NOTE = SYSTEM.replace(Regex(",\"note\":\"[^\"]*\""), "").replace(Regex(",\"expect\":\"[^\"]*\""), "")
+        .replace("note는 판단을 아주 짧게 쓴다.", "").replace("expect는 확인할 변화이며 증거가 아니다. ", "")
 
     fun system(withNote: Boolean) = if (withNote) SYSTEM else SYSTEM_NO_NOTE
 

@@ -28,10 +28,13 @@ class Prefs(context: Context) {
     var testMode: Boolean
         get() = sessionTestMode
         set(value) { sessionTestMode = value }
-    /** The model writes a short reasoning note before each action. Off = shorter, faster answers. */
+    /**
+     * The model also writes `expect`/`note` after each action. The action is generated first, so these
+     * do not change the decision; off (default) = only action + check, several seconds faster per step.
+     */
     var withNote: Boolean
-        get() = sp.getBoolean("note", true)
-        set(value) = sp.edit().putBoolean("note", value).apply()
+        get() = sp.getBoolean("note_v2", false)
+        set(value) = sp.edit().putBoolean("note_v2", value).apply()
     /** Let Qwen3 reason briefly (bounded to [thinkChars] characters) before each action. */
     var think: Boolean
         get() = sp.getBoolean("think", false)

@@ -20,8 +20,10 @@ object ActionGrammar {
         return buildString {
             // Choose the action from the live screen before generating its explanation. Otherwise
             // small models keep repeating the note they wrote before looking at the available actions.
+            // The action is chosen first, so text after it cannot improve the choice; on a ~2B model each
+            // extra Korean phrase costs seconds. The lean form keeps only `check` (used for verification).
             val tail = if (withNote) """",\"expect\":" short ",\"check\":" boolean ",\"note\":" short "}"""" else
-                """",\"expect\":" short ",\"check\":" boolean "}""""
+                """",\"check\":" boolean "}""""
             appendLine("""root ::= "{\"action\":" (${actions.joinToString(" | ")}) $tail""")
             appendLine("""open ::= "\"open_app\",\"app\":" str""")
             appendLine("""back ::= "\"back\""""")

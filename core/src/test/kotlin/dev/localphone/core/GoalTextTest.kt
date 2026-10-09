@@ -46,6 +46,8 @@ class GoalTextTest {
         val view = Evaluator.view(EvalCase("t", "x", "앱", listOf(listOf("버튼", "확인")), emptyList()))
         assertTrue("\"{\\\"action\\\":\"" in ActionGrammar.forView(view, withNote = false))
         assertTrue("\"note\"" !in Prompts.SYSTEM_NO_NOTE)
+        assertTrue("\"expect\"" !in Prompts.SYSTEM_NO_NOTE, "lean examples must match the lean grammar")
+        assertTrue("expect" !in ActionGrammar.forView(view, withNote = false))
     }
 
     @Test fun taggedNotesShowOnlyForMatchingGoals() {

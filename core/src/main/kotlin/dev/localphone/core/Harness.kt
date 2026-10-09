@@ -20,6 +20,7 @@ object Harness {
     /** Returns an action to take without the model, or null to let the model decide. */
     fun preDecide(goal: String, view: ScreenView, history: List<HistoryLine> = emptyList()): Auto? {
         emptyScreen(view, history)?.let { return it }
+        if (!ShortcutGoals.allowsUiHeuristics(goal)) return null
         resumePrompt(goal, view)?.let { return it }
         unrelatedSheet(goal, view, history)?.let { return it }
         commitLoading(goal, view, history)?.let { return it }
@@ -58,7 +59,7 @@ object Harness {
      * ("블루투스" row), open it. Switches are never pressed this way — that would change the setting.
      */
     private fun openNamedItem(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
-        if (!GoalText.opensScreen(goal) || view.snapshot.home) return null
+        if (ShortcutGoals.screenName(goal) == null || view.snapshot.home) return null
         val names = GoalText.targetWords(goal).filter { it !in generic && it.length >= 2 }
         if (names.isEmpty()) return null
         val candidates = view.elements.filter { e -> (e.kind == Kind.ITEM || e.kind == Kind.BUTTON) && e.enabled && !e.selected }
@@ -76,7 +77,7 @@ object Harness {
      * the model once accepted "배경화면 및 스타일" for "와이파이 화면".
      */
     fun screenShown(goal: String, view: ScreenView): Boolean {
-        if (!GoalText.opensScreen(goal) || GoalText.searchQuery(goal) != null) return true
+        if (ShortcutGoals.screenName(goal) == null) return true
         val names = GoalText.targetWords(goal).filter { it !in generic && it.length >= 2 }
         if (names.isEmpty()) return true
         return GoalText.matches(view.snapshot.appLabel, names) || view.elements.any { e -> GoalText.matches(e.label, names) }
@@ -84,7 +85,7 @@ object Harness {
 
     /** Selected tab or actual title, not a matching row in the previous menu. Any app can supply it. */
     fun openScreenEvidence(goal: String, view: ScreenView): Boolean {
-        if (!GoalText.opensScreen(goal) || GoalScope.multiple(goal) || GoalText.searchQuery(goal) != null) return false
+        if (ShortcutGoals.screenName(goal) == null) return false
         val names = GoalText.targetWords(goal).filter { it !in generic && it.length >= 2 }
         if (names.isEmpty()) return false
         return view.elements.any { e ->
@@ -95,7 +96,12 @@ object Harness {
 
     /** For a search goal, the query has to be visible (typed in a field or shown in results). */
     fun searchShown(goal: String, view: ScreenView): Boolean {
-        val q = GoalText.searchQuery(goal)?.let(GoalText::normalize) ?: return true
+        val q = ShortcutGoals.literalSearch(goal)?.let(GoalText::normalize) ?: return true
+        return view.elements.any { GoalText.normalize(it.label).contains(q) || GoalText.normalize(it.value).contains(q) }
+    }
+
+    fun searchPrefixShown(goal:String,view:ScreenView):Boolean {
+        val q=ShortcutGoals.searchPrefix(goal)?.let(GoalText::normalize)?:return false
         return view.elements.any { GoalText.normalize(it.label).contains(q) || GoalText.normalize(it.value).contains(q) }
     }
 
@@ -114,7 +120,7 @@ object Harness {
      * only a search button is visible). The model kept pressing unrelated buttons on search screens.
      */
     private fun search(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
-        val query = GoalText.searchQuery(goal) ?: return null
+        val query = ShortcutGoals.searchPrefix(goal) ?: return null
         if (view.snapshot.home || history.none { it.action.startsWith("open_app") || it.action.startsWith("click") }) return null
         val q = GoalText.normalize(query)
         if (history.any { it.action.startsWith("type ") && GoalText.normalize(it.action).contains(q) }) return null // typed already
@@ -162,6 +168,7 @@ object Harness {
      * and destination, so wait — at most three times in a row.
      */
     private fun commitLoading(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
+        if (GoalScope.multiple(goal) || ShortcutGoals.navigationTarget(goal)==null) return null
         if (history.takeLastWhile { it.note == LOADING }.size >= 3) return null
         if (history.count { it.note == LOADING } >= 6) return null
         // Only right after something was picked (a click that changed the screen), as in "회사" → route.

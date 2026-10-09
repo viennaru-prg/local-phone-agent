@@ -81,7 +81,7 @@ object ScreenCompactor {
     const val MAX_ELEMENTS = 70
     const val MAX_LABEL = 60
 
-    fun compact(snapshot: Snapshot): ScreenView {
+    fun compact(snapshot: Snapshot, goal: String = "", focus: String = ""): ScreenView {
         if (snapshot.home) return ScreenView(snapshot, emptyList())
         val nodes = snapshot.nodes
         val children = Array(nodes.size) { mutableListOf<Int>() }
@@ -130,8 +130,11 @@ object ScreenCompactor {
         val unique = drafts.distinctBy { Triple(it.kind, it.label, nodes[it.node].bounds) }
         // A dense map can have scores of road labels above its bottom '안내 시작' control. Preserve
         // meaningful controls before trimming, then restore their screen order for the model.
+        val relevant = GoalText.targetWords(goal)
+        val focused = GoalText.words(focus)
         fun priority(d: Draft): Int = when {
-            Regex("안내\\s*시작|안내\\s*종료|목적지|도착지|^완료$|^확인$").containsMatchIn(d.label) -> 0
+            focused.isNotEmpty() && GoalText.matches(d.label + " " + d.value, focused) -> -1
+            relevant.isNotEmpty() && GoalText.matches(d.label + " " + d.value, relevant) -> 0
             d.kind == Kind.INPUT || d.kind == Kind.SWITCH -> 1
             d.kind == Kind.BUTTON || nodes[d.node].selected -> 2
             d.kind != Kind.TEXT -> 3

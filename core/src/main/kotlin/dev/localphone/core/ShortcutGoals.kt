@@ -1,0 +1,40 @@
+package dev.localphone.core
+
+/** Positive, whole-request matches for optimizations. Anything else remains an unrestricted goal. */
+object ShortcutGoals {
+    fun body(goal: String): String = GoalText.namedApp(goal)?.let {
+        goal.substringAfter("에서").trim()
+    } ?: goal.trim()
+
+    private val navigation = Regex("^(.+?)(?:으로|로|까지|에)?\\s*(?:길\\s*안내(?:해\\s*줘|해\\s*주세요|해)?|안내(?:해\\s*줘|해\\s*주세요|해)?|가자|가\\s*줘|가요|가는\\s*길\\s*알려\\s*줘)\\s*[.!?]?$" )
+    // These are language qualifiers, not an application feature catalog. They require interpretation.
+    private val qualified = Regex("그리고|하면서|들러|들렀|경유|말고|제외|피해|피해서|없이|가장|더\\s|가까|저렴|최단|최소|최대|이상|이하|중에서|수정|변경|바꿔|다른|유지|비교|차이|조건|24시간")
+
+    fun navigationTarget(goal: String): String? {
+        if (GoalScope.multiple(goal)) return null
+        val text = body(goal)
+        if (qualified.containsMatchIn(text)) return null
+        return navigation.matchEntire(text)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() && it.length <= 50 }
+    }
+
+    /** An explicit screen-opening request, not every sentence containing '보여/화면'. */
+    fun screenName(goal: String): String? {
+        if (GoalScope.multiple(goal)) return null
+        val text = body(goal)
+        if (qualified.containsMatchIn(text)) return null
+        return Regex("^(.+?)\\s*(?:설정\\s*)?(?:화면|메뉴|탭|페이지)\\s*(?:열어|보여|들어가)(?:\\s*줘|\\s*주세요)?\\s*[.!?]?$")
+            .matchEntire(text)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    /** Search submission only, with no selection/ranking constraint. '찾아줘' is a general task. */
+    fun literalSearch(goal: String): String? {
+        if (GoalScope.multiple(goal)) return null
+        val text = body(goal)
+        if (qualified.containsMatchIn(text)) return null
+        return Regex("^(.+?)\\s*(?:을|를)?\\s*검색(?:\\s*해\\s*줘|\\s*해\\s*주세요|\\s*해|\\s*줘)?\\s*[.!?]?$")
+            .matchEntire(text)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() && it.length <= 40 }
+    }
+
+    fun searchPrefix(goal: String): String? = literalSearch(GoalScope.parts(goal).first())
+    fun allowsUiHeuristics(goal: String) = navigationTarget(goal) != null || screenName(goal) != null || searchPrefix(goal) != null
+}

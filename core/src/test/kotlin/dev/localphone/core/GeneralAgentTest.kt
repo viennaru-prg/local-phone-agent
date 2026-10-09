@@ -188,6 +188,7 @@ class GeneralAgentTest {
         val result = Agent(model, phone, RecipeBook({null}, {}), {emptyList()}).run("현재 작업을 꺼줘")
         assertEquals(Outcome.DONE, result.outcome)
         assertEquals(1, decisions, "Do not keep looking for an exit after the task was stopped")
-        assertEquals(1, verifications)
+        assertEquals(0, verifications, "The actual atomic termination uses its observed postcondition")
+        assertTrue(result.history.any { it.action=="완료 확인" && it.outcome=="목표 달성" })
     }
 }

@@ -4,7 +4,7 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 
 enum class MediaKey { PLAY, PAUSE, NEXT, PREVIOUS }
-enum class ScrollDir { DOWN, UP }
+enum class ScrollDir { DOWN, UP, LEFT, RIGHT }
 
 sealed interface AgentAction {
     data class OpenApp(val app: String) : AgentAction
@@ -12,6 +12,7 @@ sealed interface AgentAction {
     data class LongClick(val id: Int) : AgentAction
     data class Type(val id: Int, val text: String, val enter: Boolean) : AgentAction
     data class Scroll(val dir: ScrollDir, val id: Int?) : AgentAction
+    data class Inspect(val query: String) : AgentAction
     data object Back : AgentAction
     data object Wait : AgentAction
     data class Media(val key: MediaKey) : AgentAction
@@ -20,7 +21,7 @@ sealed interface AgentAction {
     data class Fail(val reason: String) : AgentAction
 }
 
-data class Decision(val note: String, val action: AgentAction)
+data class Decision(val note: String, val action: AgentAction, val expect: String = "", val check: Boolean = false)
 
 class BadModelOutput(message: String) : Exception(message)
 
@@ -38,8 +39,9 @@ object ActionParser {
                 if (view.element(id)?.kind != Kind.INPUT) throw BadModelOutput("[$id]은 입력칸이 아님")
                 AgentAction.Type(id, json.str("text"), json.get("enter")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false)
             }
-            "scroll" -> AgentAction.Scroll(if (json.str("dir") == "up") ScrollDir.UP else ScrollDir.DOWN,
+            "scroll" -> AgentAction.Scroll(runCatching { ScrollDir.valueOf(json.str("dir").uppercase()) }.getOrElse { throw BadModelOutput("스크롤 방향 오류") },
                 if (json.has("id")) json.id(view) else null)
+            "inspect" -> AgentAction.Inspect(json.str("query").take(80))
             "back" -> AgentAction.Back
             "wait" -> AgentAction.Wait
             "media" -> AgentAction.Media(runCatching { MediaKey.valueOf(json.str("key").uppercase()) }
@@ -49,7 +51,7 @@ object ActionParser {
             "fail" -> AgentAction.Fail(json.str("reason"))
             else -> throw BadModelOutput("알 수 없는 동작: $name")
         }
-        return Decision(note, action)
+        return Decision(note, action, json.str("expect").take(80), json.get("check")?.asBoolean == true)
     }
 
     private fun JsonObject.str(key: String): String =
@@ -74,6 +76,7 @@ fun AgentAction.describe(view: ScreenView?, ids: Boolean = true): String {
         is AgentAction.LongClick -> "long_click ${el(id)}"
         is AgentAction.Type -> "type ${el(id)} \"$text\"" + if (enter) " +enter" else ""
         is AgentAction.Scroll -> "scroll ${dir.name.lowercase()}" + (id?.let { " " + el(it) } ?: "")
+        is AgentAction.Inspect -> "inspect \"$query\""
         AgentAction.Back -> "back"
         AgentAction.Wait -> "wait"
         is AgentAction.Media -> "media ${key.name.lowercase()}"

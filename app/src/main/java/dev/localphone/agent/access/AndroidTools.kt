@@ -59,7 +59,7 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
     override suspend fun navigate(place: Place): String? {
         if (place.lat == 0.0 && place.lng == 0.0) return null
         val session = navigation ?: NavigationSession.forGoal("${place.name}로 안내해줘", place)!!
-        session.beforeDispatch(phone.observe()?.let(ScreenCompactor::compact))
+        session.beforeDispatch(phone.observe()?.let { ScreenCompactor.compact(it, session.goal) })
         // NAVER Map URL scheme: starts car guidance from the current location to the coordinates.
         val uri = Uri.parse("nmap://navigation?dlat=${place.lat}&dlng=${place.lng}" +
             "&dname=${Uri.encode(place.name)}&appname=${context.packageName}")

@@ -5,17 +5,24 @@ package dev.localphone.core
  * current screen, so a small model cannot produce prose, unknown actions or invented ids.
  */
 object ActionGrammar {
-    /** [withNote] = the model writes a short reasoning note first; without it the answer is about half as long. */
-    fun forView(view: ScreenView, withNote: Boolean = true, excludedIds: Set<Int> = emptySet()): String {
+    /** [withNote] adds a brief explanation after the action; disabling it produces fewer tokens. */
+    fun forView(view: ScreenView, withNote: Boolean = true, excludedIds: Set<Int> = emptySet(),
+                excludedLongIds:Set<Int> = excludedIds, excludedOps:Set<String> = emptySet()): String {
         val all = view.elements.filter { it.kind != Kind.TEXT && it.enabled && it.id !in excludedIds }.map { it.id }
+        val longs = view.elements.filter { it.kind != Kind.TEXT && it.enabled && it.id !in excludedLongIds }.map { it.id }
         val inputs = view.inputs.filter { it.enabled }.map { it.id }
         val lists = view.lists.filter { it.enabled }.map { it.id }
-        val actions = mutableListOf("open", "back", "wait", "media", "done", "ask", "fail", "scroll")
-        if (all.isNotEmpty()) actions += listOf("click", "longclick")
+        val actions = mutableListOf("open", "back", "wait", "media", "done", "ask", "fail", "scroll", "inspect")
+        if (all.isNotEmpty()) actions += "click"
+        if (longs.isNotEmpty()) actions += "longclick"
         if (inputs.isNotEmpty()) actions += "type"
+        actions.removeAll(excludedOps)
         return buildString {
-            val head = if (withNote) """"{\"note\":" short ",\"action\":"""" else """"{\"action\":""""
-            appendLine("""root ::= $head (${actions.joinToString(" | ")}) "}"""")
+            // Choose the action from the live screen before generating its explanation. Otherwise
+            // small models keep repeating the note they wrote before looking at the available actions.
+            val tail = if (withNote) """",\"expect\":" short ",\"check\":" boolean ",\"note\":" short "}"""" else
+                """",\"expect\":" short ",\"check\":" boolean "}""""
+            appendLine("""root ::= "{\"action\":" (${actions.joinToString(" | ")}) $tail""")
             appendLine("""open ::= "\"open_app\",\"app\":" str""")
             appendLine("""back ::= "\"back\""""")
             appendLine("""wait ::= "\"wait\""""")
@@ -24,11 +31,15 @@ object ActionGrammar {
             appendLine("""ask ::= "\"ask\",\"question\":" str""")
             appendLine("""fail ::= "\"fail\",\"reason\":" str""")
             val scrollId = if (lists.isNotEmpty()) """ ("," "\"id\":" sid)?""" else ""
-            appendLine("""scroll ::= "\"scroll\",\"dir\":" ("\"down\"" | "\"up\"")$scrollId""")
+            appendLine("""scroll ::= "\"scroll\",\"dir\":" ("\"down\"" | "\"up\"" | "\"left\"" | "\"right\"")$scrollId""")
+            appendLine("""inspect ::= "\"inspect\",\"query\":" short""")
             if (all.isNotEmpty()) {
                 appendLine("""click ::= "\"click\",\"id\":" id""")
-                appendLine("""longclick ::= "\"long_click\",\"id\":" id""")
                 appendLine("id ::= " + all.joinToString(" | ") { "\"$it\"" })
+            }
+            if (longs.isNotEmpty()) {
+                appendLine("""longclick ::= "\"long_click\",\"id\":" lid""")
+                appendLine("lid ::= " + longs.joinToString(" | ") { "\"$it\"" })
             }
             if (inputs.isNotEmpty()) {
                 appendLine("""type ::= "\"type\",\"id\":" iid ",\"text\":" str ",\"enter\":" ("true" | "false")""")
@@ -36,6 +47,7 @@ object ActionGrammar {
             }
             if (lists.isNotEmpty()) appendLine("sid ::= " + lists.joinToString(" | ") { "\"$it\"" })
             appendLine("""short ::= "\"" char{0,60} "\""""")
+            appendLine("""boolean ::= "true" | "false"""")
             appendLine("""str ::= "\"" char{0,120} "\""""")
             appendLine("""char ::= [^"\\\x00-\x1F] | "\\" ["\\/bfnrt]""")
         }

@@ -118,17 +118,14 @@ class NavigationSession(val goal: String, private val names: List<String>) {
         const val NAVER_MAP = "com.nhn.android.nmap"
         fun forGoal(goal: String, place: Place? = null): NavigationSession? {
             if (!Router.isNavigationGoal(goal) || !Router.usesNaver(goal)) return null
-            val text = goal.trim().substringAfter("에서", goal.trim()).trim()
-            val fromGoal = Regex("^(.+?)(?:으로|로|까지|에)\\s*(?:안내|가자|가\\s*줘|가요|데려|길)")
-                .find(text)?.groupValues?.get(1)?.trim()
-            val target = fromGoal ?: GoalText.targetWords(goal).firstOrNull { it !in setOf("안내", "길안내", "길찾기", "네이버", "지도", "네비", "내비") }
+            val target = ShortcutGoals.navigationTarget(goal) ?: return null
             val aliases = when (GoalText.normalize(target.orEmpty())) {
                 "집", "우리집", "자택" -> listOf("집", "우리집", "자택")
                 "회사", "우리회사", "직장", "사무실" -> listOf("회사", "우리 회사", "직장", "사무실")
                 "본가", "부모님집" -> listOf("본가", "부모님집")
                 else -> listOfNotNull(target)
             }
-            return NavigationSession(goal, place?.names ?: aliases)
+            return NavigationSession(goal, place?.takeIf { p -> p.names.any { GoalText.normalize(it) == GoalText.normalize(target) } }?.names ?: aliases)
         }
     }
 }
@@ -141,7 +138,7 @@ class NavigationDriver(private val phone: Phone, private val session: Navigation
         var lastState = ""
         while (phone.now() - started < timeoutMs) {
             currentCoroutineContext().ensureActive()
-            val view = phone.observe()?.let(ScreenCompactor::compact)
+            val view = phone.observe()?.let { ScreenCompactor.compact(it, session.goal) }
             if (view == null) { delay(150); continue }
             val evidence = session.observe(view)
             if (lastState != evidence.state) {

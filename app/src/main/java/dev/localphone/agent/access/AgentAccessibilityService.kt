@@ -21,6 +21,7 @@ import android.widget.TextView
 import dev.localphone.core.Bounds
 import dev.localphone.core.RawNode
 import dev.localphone.core.ScrollDir
+import dev.localphone.core.ScrollGesture
 import dev.localphone.core.Snapshot
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -181,13 +182,10 @@ class AgentAccessibilityService : AccessibilityService() {
     suspend fun scroll(snapshot: Snapshot, index: Int?, dir: ScrollDir): Boolean {
         // A real swipe inside the list: ACTION_SCROLL_FORWARD is often "accepted" by lists (Samsung
         // Settings) without moving them. Finger moves up to scroll down.
-        val d = resources.displayMetrics
-        val b = index?.let { snapshot.nodes.getOrNull(it)?.bounds }?.takeIf { it.height > d.heightPixels / 4 }
-        val top = b?.top?.toFloat() ?: 0f
-        val height = b?.height?.toFloat() ?: d.heightPixels.toFloat()
-        val x = b?.centerX?.toFloat() ?: (d.widthPixels / 2f)
-        val (from, to) = if (dir == ScrollDir.DOWN) top + height * 0.75f to top + height * 0.25f else top + height * 0.25f to top + height * 0.75f
-        return swipe(x, from, x, to)
+        val b = index?.let { snapshot.nodes.getOrNull(it)?.bounds }?.takeIf { !it.empty }
+            ?: Bounds(0, 0, snapshot.width, snapshot.height)
+        val path = ScrollGesture.path(b, snapshot.width, snapshot.height, dir) ?: return false
+        return swipe(path.x1, path.y1, path.x2, path.y2)
     }
 
     fun back() = performGlobalAction(GLOBAL_ACTION_BACK)

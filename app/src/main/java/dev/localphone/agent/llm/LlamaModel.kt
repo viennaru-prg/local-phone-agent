@@ -4,6 +4,7 @@ import android.util.Log
 import dev.localphone.agent.AgentApp
 import dev.localphone.core.LanguageModel
 import dev.localphone.core.ModelPrompt
+import dev.localphone.core.Prompts
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -12,7 +13,7 @@ import java.io.File
 internal object LlamaNative {
     init { System.loadLibrary("agent_llama") }
     external fun load(path: String, threads: Int, nCtx: Int, gpuLayers: Int): Long
-    external fun infer(handle: Long, prompt: ByteArray, maxTokens: Int, grammar: ByteArray, timeoutMs: Long): ByteArray
+    external fun infer(handle: Long, prompt: ByteArray, maxTokens: Int, grammar: ByteArray, timeoutMs: Long, contextSlot:Int=0): ByteArray
     external fun metrics(handle: Long): LongArray
     external fun reset(handle: Long)
     external fun cancel(handle: Long)
@@ -79,7 +80,8 @@ class LlamaModel(private val app: AgentApp) : LanguageModel {
         val h = handle
         LlamaNative.reset(h)
         val maxTokens = if (think) 200 + app.prefs.thinkChars else 200
-        val job = scope.async(Dispatchers.IO) { LlamaNative.infer(h, text.toByteArray(), maxTokens, thinkingGrammar(grammar).toByteArray(), STEP_TIMEOUT_MS) }
+        val contextSlot=if(prompt.system==Prompts.VERIFY_SYSTEM) 1 else 0
+        val job = scope.async(Dispatchers.IO) { LlamaNative.infer(h, text.toByteArray(), maxTokens, thinkingGrammar(grammar).toByteArray(), STEP_TIMEOUT_MS,contextSlot) }
         try {
             val out = withTimeoutOrNull(STEP_TIMEOUT_MS + 5_000) { job.await() }
             if (out == null) {

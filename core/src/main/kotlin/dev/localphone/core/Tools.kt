@@ -53,12 +53,7 @@ interface Tools {
 object Router {
     private val navVerb = Regex("가자|가\\s*줘|가요|안내|길\\s*찾|네비|내비|데려|가는\\s*길")
     fun isNavigationGoal(goal: String): Boolean {
-        if (GoalScope.multiple(goal)) return false
-        if (!navVerb.containsMatchIn(goal) || Regex("종료|끝내|그만|취소|꺼").containsMatchIn(goal)) return false
-        if (Regex("^(?:네이버지도|지도|내비|네비|내비게이션|네비게이션)(?:앱)?(?:켜|열어|실행)(?:줘|해줘|주세요)?$")
-                .matches(GoalText.normalize(goal))) return false
-        if (GoalText.opensScreen(goal) && Regex("화면|메뉴|탭|페이지|도움말|사용\\s*안내").containsMatchIn(goal)) return false
-        return true
+        return ShortcutGoals.navigationTarget(goal) != null
     }
     fun usesNaver(goal: String): Boolean {
         val app = GoalText.namedApp(goal)?.let(GoalText::normalize)
@@ -72,7 +67,8 @@ object Router {
      */
     fun quick(goal: String, places: PlaceBook): Route? {
         if (!isNavigationGoal(goal) || !usesNaver(goal)) return null
-        return places.mentionedIn(goal)?.let { Route.Navigate(it) }
+        val target = ShortcutGoals.navigationTarget(goal) ?: return null
+        return places.named(target)?.let { Route.Navigate(it) }
     }
 
     private val toolCue = Regex("음악|노래|곡|재생|틀어|멈춰|정지|일시|다음|이전|볼륨|가자|가줘|안내|길|네비|내비|데려")
@@ -81,15 +77,27 @@ object Router {
     /** Tool grammars constrain JSON, not intent. Reject an unrelated model-selected operation. */
     fun validate(goal: String, route: Route, places: PlaceBook): Route = when (route) {
         is Route.Media -> if (allowsMedia(goal)) route else Route.Screen
-        is Route.Navigate -> if (isNavigationGoal(goal) && usesNaver(goal) && places.mentionedIn(goal) == route.place) route else Route.Screen
+        is Route.Navigate -> if (isNavigationGoal(goal) && usesNaver(goal) &&
+            ShortcutGoals.navigationTarget(goal)?.let(places::named) == route.place) route else Route.Screen
         Route.Screen -> route
     }
 
-    fun allowsMedia(goal: String): Boolean = (!navVerb.containsMatchIn(goal) ||
-        (GoalScope.multiple(goal) && Regex("음악|노래|곡").containsMatchIn(goal))) &&
-        GoalText.searchQuery(goal) == null && GoalText.namedApp(goal) == null &&
-        (Regex("음악|노래|곡").containsMatchIn(goal) ||
-            Regex("^(?:재생|일시정지)(?:해줘|해주세요|해|줘)?$").matches(GoalText.normalize(goal)))
+    fun simpleMediaKey(goal: String): MediaKey? {
+        if (GoalScope.multiple(goal) || GoalText.namedApp(goal) != null) return null
+        val g = GoalText.normalize(goal)
+        val end = "(?:해줘|해주세요|줘|주세요|해|할래)?"
+        return when {
+            Regex("^(?:(?:음악|노래|곡)(?:을|를)?)?(?:재생|틀어)$end$").matches(g) -> MediaKey.PLAY
+            Regex("^(?:음악|노래|곡)(?:을|를)?(?:멈춰|정지|일시정지)$end$").matches(g) ||
+                Regex("^일시정지$end$").matches(g) -> MediaKey.PAUSE
+            Regex("^다음곡(?:으로)?(?:넘겨|넘겨줘|넘겨주세요|틀어|재생)?$end$").matches(g) -> MediaKey.NEXT
+            Regex("^이전곡(?:으로)?(?:넘겨|넘겨줘|넘겨주세요|틀어|재생)?$end$").matches(g) -> MediaKey.PREVIOUS
+            else -> null
+        }
+    }
+
+    fun allowsMedia(goal: String): Boolean = simpleMediaKey(goal) != null ||
+        (GoalScope.multiple(goal) && GoalScope.parts(goal).any { simpleMediaKey(it) != null })
 
     /** Short classification prompt for everything else. Place names are offered as a closed list. */
     fun prompt(goal: String, places: List<Place>): ModelPrompt {
@@ -152,17 +160,7 @@ class Assistant(
         var routeMs = 0L
         // With no local destination, resolve it in the actual map UI. Do not ask a classifier whose
         // grammar omits navigation: it picked music PAUSE for '회사로 안내해 줘' on the S25.
-        val candidate = Router.quick(goal, places) ?: if (!Router.allowsMedia(goal) || GoalScope.multiple(goal)) Route.Screen else run {
-            listener.progress("명령 확인 중…")
-            val all = places.all()
-            val t0 = System.nanoTime()
-            try {
-                raw = model.decide(Router.prompt(goal, all), Router.grammar(all))
-                Router.parse(raw, places)
-            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) { raw = "router error: ${e.message}"; Route.Screen }
-            finally { routeMs = (System.nanoTime() - t0) / 1_000_000 }
-        }
+        val candidate = Router.quick(goal, places) ?: Router.simpleMediaKey(goal)?.let { Route.Media(it) } ?: Route.Screen
         val route = Router.validate(goal, candidate, places)
         val reason = when {
             candidate != route -> "명령과 맞지 않는 Tool을 거절하고 화면 작업으로 전환"

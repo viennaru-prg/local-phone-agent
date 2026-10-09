@@ -16,6 +16,7 @@ class NativeGeneralTest {
         for (goal in listOf("네비 꺼줘", "네비 종료해줘")) {
             var phase = "guidance"
             var calls = 0
+            var attemptedAfterExit = false
             fun snapshot(): Snapshot {
                 fun node(i: Int, label: String, id: String = "", selected: Boolean = false, button: Boolean = true) = RawNode("r.$i", 0,
                     text = label, viewId = id, clickable = button, selected = selected,
@@ -34,6 +35,7 @@ class NativeGeneralTest {
             val phone = object : Phone {
                 override suspend fun observe() = snapshot()
                 override suspend fun perform(view: ScreenView, action: AgentAction): Boolean {
+                    if(phase=="normal") attemptedAfterExit=true
                     val label = (action as? AgentAction.Click)?.let { view.element(it.id)?.label }.orEmpty()
                     if (label.contains("메뉴·옵션")) phase = if (phase == "menu") "guidance" else "menu"
                     else if (label == "안내 종료") phase = "normal"
@@ -56,6 +58,7 @@ class NativeGeneralTest {
                 .run(goal)
             assertEquals(result.toString(),Outcome.DONE,result.outcome)
             assertEquals("normal",phase)
+            assertFalse("A completed task must not cause further map actions",attemptedAfterExit)
             assertTrue(result.history.any { it.action.contains("안내 종료") })
             android.util.Log.i("AgentVerification", "NAV_STOP wording=$goal phase=$phase calls=$calls normalMapVerified=true")
         }
@@ -66,6 +69,7 @@ class NativeGeneralTest {
         var phase = "home"
         var query = ""
         var calls = 0
+        var attemptedPause = false
         fun snapshot(): Snapshot {
             fun node(i: Int, label: String, editable: Boolean = false, button: Boolean = true) = RawNode("r.$i", 0,
                 text = label, hint = if (editable) "검색" else "", editable = editable, clickable = button,
@@ -86,6 +90,7 @@ class NativeGeneralTest {
                     is AgentAction.Type -> { query = action.text; phase = "results" }
                     is AgentAction.Click -> {
                         val label = view.element(action.id)!!.label
+                        if(phase=="playing" && label=="일시 정지") attemptedPause=true
                         if (phase == "results" && label == "고양이 첫 영상") phase = "detail"
                         else if (phase == "detail" && label == "재생") phase = "playing"
                     }
@@ -111,6 +116,7 @@ class NativeGeneralTest {
         assertEquals(result.toString(), Outcome.DONE, result.outcome)
         assertEquals("고양이", query)
         assertEquals("playing", phase)
+        assertFalse("A completed playback goal must not be undone",attemptedPause)
         assertTrue(calls > 0)
         android.util.Log.i("AgentVerification", "NATIVE_COMPOUND model=${app.llm.modelFile()?.name} phase=$phase calls=$calls steps=${result.history.size}")
         Unit

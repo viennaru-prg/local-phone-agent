@@ -56,8 +56,8 @@ object GoalText {
      * tends to be a long explanation; spoken results should be a few words.
      */
     fun spokenResult(goal: String, modelSay: String): String {
-        if (!GoalScope.multiple(goal)) searchQuery(goal)?.let { return "'$it' 검색했어요." }
-        if (!GoalScope.multiple(goal) && opensScreen(goal)) {
+        ShortcutGoals.literalSearch(goal)?.let { return "'$it' 검색했어요." }
+        if (ShortcutGoals.screenName(goal) != null || DirectGoals.appName(goal) != null) {
             val names = targetWords(goal).filter { it !in setOf("화면", "메뉴", "탭", "페이지", "보여", "열어", "앱") }
             if (names.isNotEmpty()) {
                 val what = goal.split(Regex("\\s+")).filter { w -> names.any { normalize(w).startsWith(it) } }
@@ -65,8 +65,9 @@ object GoalText {
                 return if (Regex("화면|메뉴|탭|페이지").containsMatchIn(goal)) "$what 화면을 열었어요." else "$what 열었어요."
             }
         }
-        val first = modelSay.trim().split(Regex("(?<=[.!?。])\\s+")).firstOrNull().orEmpty()
-        return if (first.length in 1..40) first else "완료했어요."
+        val text = modelSay.trim()
+        if (ShortcutGoals.navigationTarget(goal) != null) return text.split(Regex("(?<=[.!?。])\\s+")).first().ifBlank { "완료했어요." }
+        return if (text.isNotEmpty()) text.take(360) else "완료했어요."
     }
 
     /** Spoken Korean term → how Android usually labels it (and back). */

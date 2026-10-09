@@ -84,14 +84,19 @@ object Router {
 
     fun simpleMediaKey(goal: String): MediaKey? {
         if (GoalScope.multiple(goal) || GoalText.namedApp(goal) != null) return null
-        val g = GoalText.normalize(goal)
-        val end = "(?:해줘|해주세요|줘|주세요|해|할래)?"
+        // Everyday variants: "노래 꺼줘", "음악 좀 멈춰", "다음 노래", "노래 다시 틀어줘".
+        val g = GoalText.normalize(goal).replace("좀", "")
+        val end = "(?:해줘|해주세요|줘|주세요|해|할래|라)?"
+        val music = "(?:음악|노래|곡)(?:을|를)?"
+        val track = "(?:곡|노래|음악|거)"
         return when {
-            Regex("^(?:(?:음악|노래|곡)(?:을|를)?)?(?:재생|틀어)$end$").matches(g) -> MediaKey.PLAY
-            Regex("^(?:음악|노래|곡)(?:을|를)?(?:멈춰|정지|일시정지)$end$").matches(g) ||
-                Regex("^일시정지$end$").matches(g) -> MediaKey.PAUSE
-            Regex("^다음곡(?:으로)?(?:넘겨|넘겨줘|넘겨주세요|틀어|재생)?$end$").matches(g) -> MediaKey.NEXT
-            Regex("^이전곡(?:으로)?(?:넘겨|넘겨줘|넘겨주세요|틀어|재생)?$end$").matches(g) -> MediaKey.PREVIOUS
+            Regex("^(?:$music)?(?:다시|계속)?(?:재생|틀어|들려)$end$").matches(g) ||
+                Regex("^$music(?:다시)?켜$end$").matches(g) -> MediaKey.PLAY
+            Regex("^$music(?:멈춰|정지|일시정지|꺼|그만)$end$").matches(g) ||
+                Regex("^(?:일시정지|정지)$end$").matches(g) -> MediaKey.PAUSE
+            Regex("^(?:다음$track|$music?다음$track?)(?:으로)?(?:넘겨|틀어|재생|들려)?$end$").matches(g) ||
+                Regex("^$music?넘겨$end$").matches(g) -> MediaKey.NEXT
+            Regex("^(?:이전|앞)$track(?:으로)?(?:넘겨|틀어|재생|들려)?$end$").matches(g) -> MediaKey.PREVIOUS
             else -> null
         }
     }

@@ -12,6 +12,17 @@ class ToolsTest {
             assertFalse(Router.allowsMedia(goal))
         }
     }
+    @Test fun everydayMediaPhrasesUseTheFastPath() {
+        val cases = mapOf(
+            "노래 꺼줘" to MediaKey.PAUSE, "음악 좀 멈춰" to MediaKey.PAUSE, "음악 그만" to MediaKey.PAUSE, "일시정지" to MediaKey.PAUSE,
+            "다음 노래" to MediaKey.NEXT, "노래 넘겨줘" to MediaKey.NEXT, "다음 곡 틀어줘" to MediaKey.NEXT,
+            "이전 곡" to MediaKey.PREVIOUS, "앞 노래 틀어줘" to MediaKey.PREVIOUS,
+            "노래 다시 틀어줘" to MediaKey.PLAY, "음악 켜줘" to MediaKey.PLAY, "음악 재생해줘" to MediaKey.PLAY)
+        for ((goal, key) in cases) assertEquals(key, Router.simpleMediaKey(goal), goal)
+        for (goal in listOf("아이유 노래 틀어줘", "유튜브에서 아이유 노래 검색해줘", "재생목록에 추가해줘", "다음 주 일정 알려줘"))
+            assertNull(Router.simpleMediaKey(goal), goal)
+    }
+
     @Test fun ordinaryMediaControlsRemainAllowedButSongSearchDoesNot() {
         assertTrue(Router.allowsMedia("음악 일시정지해줘"))
         assertTrue(Router.allowsMedia("다음 곡으로 넘겨줘"))

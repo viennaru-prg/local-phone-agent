@@ -72,11 +72,29 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
         return "${place.name}${if (endsWithBatchim(place.name)) "으로" else "로"} 안내를 시작했어요."
     }
 
-    override suspend fun media(key: MediaKey): String? =
-        if (phone.media(key)) when (key) {
-            MediaKey.PLAY -> "음악을 재생할게요."; MediaKey.PAUSE -> "음악을 멈췄어요."
-            MediaKey.NEXT -> "다음 곡으로 넘길게요."; MediaKey.PREVIOUS -> "이전 곡으로 갈게요."
-        } else null
+    /**
+     * A media key is only a request. Success is reported only when the system audio state confirms it
+     * (music started/stopped); otherwise return null so the screen agent opens the player and does it
+     * on screen — e.g. ClipStream inside Secure Folder may not receive keys from this profile.
+     */
+    override suspend fun media(key: MediaKey): String? {
+        val audio = context.getSystemService(android.media.AudioManager::class.java)
+        val playingBefore = audio.isMusicActive
+        if (key == MediaKey.PAUSE && !playingBefore) return "지금 재생 중인 음악이 없어요."
+        if (key != MediaKey.PLAY && key != MediaKey.PAUSE && !playingBefore) return null // nothing to skip; let the agent open the player
+        if (!phone.media(key)) return null
+        val wanted = key != MediaKey.PAUSE
+        val confirmed = withTimeoutOrNull(3000) {
+            while (audio.isMusicActive != wanted) delay(150)
+            true
+        } ?: false
+        Log.i(TAG, "media $key playingBefore=$playingBefore confirmed=$confirmed")
+        if (!confirmed) return null
+        return when (key) {
+            MediaKey.PLAY -> "음악을 재생했어요."; MediaKey.PAUSE -> "음악을 멈췄어요."
+            MediaKey.NEXT -> "다음 곡으로 넘겼어요."; MediaKey.PREVIOUS -> "이전 곡으로 갔어요."
+        }
+    }
 
     private fun endsWithBatchim(word: String): Boolean {
         val c = word.lastOrNull() ?: return false

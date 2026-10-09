@@ -252,7 +252,8 @@ class Agent(
         val musicApp = config.musicApp ?: AppProfiles.appFor("music")
         // Song and playlist commands that name no app happen in the user's player, not on whatever is in front
         // ("재생목록에서 빼줘" once scrolled NAVER Map's lists).
-        val musicGoal = GoalText.playSong(goal) != null || GoalText.playlistAdd(goal) != null || GoalText.playlistRemove(goal) != null
+        val musicGoal = GoalText.playSong(goal) != null || GoalText.playlistAdd(goal) != null || GoalText.playlistRemove(goal) != null ||
+            QuickCommands.asksNowPlaying(goal)
         if (musicApp != null && musicGoal && GoalText.namedApp(goal) == null && !Harness.isPlayer(view) && !appInFront(view, musicApp)) {
             val (outcome, next) = execute(run, AgentAction.OpenApp(musicApp), view)
             listener.step(StepRecord(0, "android_api", "", "", "open_app \"$musicApp\"", outcome, "곡 재생은 음악 앱에서", 0, phone.now() - started))
@@ -271,6 +272,15 @@ class Agent(
             navigation?.observe(view)?.takeIf { it.complete }?.let {
                 listener.step(StepRecord(index, "navigation", view.render(), "", "verify", "완료", it.reason, 0, phone.now() - started))
                 return finish(run, goal, navigation?.spokenStart ?: "길안내를 시작했어요.")
+            }
+            // Questions answered from the screen: travel time on the route preview, the song in the player bar.
+            navigation?.etaAnswer(view)?.let { say ->
+                listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "경로 미리보기의 시간·거리", 0, phone.now() - started))
+                return finish(run, goal, say)
+            }
+            if (QuickCommands.asksNowPlaying(goal)) Harness.barSong(view)?.let { song ->
+                listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "재생 막대의 곡 제목", 0, phone.now() - started))
+                return finish(run, goal, if (Harness.playerState(view) == false) "지금은 '$song'에서 멈춰 있어요." else "지금 '$song' 나오고 있어요.")
             }
             if (Harness.openScreenEvidence(goal, view)) {
                 listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "요청한 화면의 제목·선택 탭 확인", 0, phone.now() - started))

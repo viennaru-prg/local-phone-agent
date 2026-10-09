@@ -48,6 +48,8 @@ interface Tools {
     /** Open the map through Android before resolving an unregistered destination on screen. */
     suspend fun prepareNavigation(): Boolean = false
     suspend fun openDirect(goal: String): String? = null
+    /** Time, battery, volume, timer, alarm: answered or done by Android directly; null = not handled. */
+    suspend fun quick(request: QuickRequest): String? = null
 }
 
 object Router {
@@ -165,8 +167,15 @@ class Assistant(
         // "안내해 줘" whose place was cut off: ask for it rather than guess.
         if (Regex("안내|길\\s*찾|내비|네비|데려다").containsMatchIn(goal) && !Regex("종료|그만|꺼|끝").containsMatchIn(goal) && GoalText.missingDestination(goal))
             return AgentResult(Outcome.ASK, "어디로 안내할까요?", listOf(HistoryLine("목적지 질문", goal)))
+        QuickCommands.parse(goal)?.let { request ->
+            tools.quick(request)?.let { say ->
+                listener.step(StepRecord(0, "android_api", "", "", request.toString(), "완료", "Android 기능으로 바로 처리", 0, 0))
+                return AgentResult(Outcome.DONE, say, emptyList())
+            }
+        }
         // A name with no request ("이름 모임") would only send the screen agent wandering the app in front.
-        if (!GoalText.hasRequest(goal)) return AgentResult(Outcome.FAILED, "'${goal.trim()}'을(를) 어떻게 할지 함께 말씀해 주세요. 예: 회사로 안내해줘", emptyList())
+        // Questions ("몇 시야?") and short music commands ("다음 노래") are requests too.
+        if (!GoalText.hasRequest(goal) && !QuickCommands.isQuestion(goal) && Router.mediaKeyIn(goal) == null) return AgentResult(Outcome.FAILED, "'${goal.trim()}'을(를) 어떻게 할지 함께 말씀해 주세요. 예: 회사로 안내해줘", emptyList())
         tools.openDirect(goal)?.let {
             listener.step(StepRecord(0, "android_api", "", "", "open", "요청한 앱·화면 확인됨", "단일 실행 목표를 Android API로 처리", 0, 0))
             return AgentResult(Outcome.DONE, it, emptyList())
@@ -192,7 +201,7 @@ class Assistant(
             is Route.Media -> tools.media(route.key)?.let { AgentResult(Outcome.DONE, it, emptyList()) }
                 ?: agent.run(goal, listOf(HistoryLine("media ${route.key.name.lowercase()}", "키 전송, 확인 전")))
             Route.Screen -> {
-                if (Router.isNavigationGoal(goal) && Router.usesNaver(goal)) {
+                if ((Router.isNavigationGoal(goal) && Router.usesNaver(goal)) || QuickCommands.etaTarget(goal) != null) {
                     val opened = tools.prepareNavigation()
                     listener.step(StepRecord(0, "navigation", "", "", "open_map", if (opened) "지도 전면 화면 확인됨" else "화면 AI로 앱 실행", "미등록 장소는 실제 지도에서 확인", 0, routeMs))
                 }

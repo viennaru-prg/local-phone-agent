@@ -96,12 +96,88 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
             true
         } ?: false
         Log.i(TAG, "media $key playingBefore=$playingBefore confirmed=$confirmed")
+        if (!confirmed && key == MediaKey.PAUSE && pauseByAudioFocus(audio)) return "음악을 멈췄어요."
         if (!confirmed) return null
         return when (key) {
             MediaKey.PLAY -> "음악을 재생했어요."; MediaKey.PAUSE -> "음악을 멈췄어요."
             MediaKey.NEXT -> "다음 곡으로 넘겼어요."; MediaKey.PREVIOUS -> "이전 곡으로 갔어요."
         }
     }
+
+    /**
+     * A player the key does not reach (Secure Folder, possibly locked): take audio focus, which players
+     * answer by pausing, then hand it back. No app has to be opened or unlocked.
+     */
+    private suspend fun pauseByAudioFocus(audio: android.media.AudioManager): Boolean {
+        val request = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC).build())
+            .setOnAudioFocusChangeListener { }.build()
+        if (audio.requestAudioFocus(request) != android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED) return false
+        val paused = withTimeoutOrNull(4000) { while (audio.isMusicActive) delay(150); true } ?: false
+        delay(400)
+        audio.abandonAudioFocusRequest(request)
+        Log.i(TAG, "pause by audio focus: $paused")
+        return paused
+    }
+
+    override suspend fun quick(request: QuickRequest): String? = runCatching {
+        when (request) {
+            QuickRequest.Time -> {
+                val t = java.time.LocalTime.now()
+                val h = t.hour % 12
+                "지금 ${if (t.hour < 12) "오전" else "오후"} ${if (h == 0) 12 else h}시 ${t.minute}분이에요."
+            }
+            QuickRequest.Date -> {
+                val d = java.time.LocalDate.now()
+                val day = d.dayOfWeek.getDisplayName(java.time.format.TextStyle.FULL, Locale.KOREAN)
+                "오늘은 ${d.monthValue}월 ${d.dayOfMonth}일 ${day}이에요."
+            }
+            QuickRequest.Battery -> {
+                val bm = context.getSystemService(android.os.BatteryManager::class.java)
+                val level = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                "배터리 ${level}% 남았어요.${if (bm.isCharging) " 충전 중이에요." else ""}"
+            }
+            is QuickRequest.Volume -> {
+                val audio = context.getSystemService(android.media.AudioManager::class.java)
+                val stream = android.media.AudioManager.STREAM_MUSIC
+                val max = audio.getStreamMaxVolume(stream)
+                when {
+                    request.toMax -> audio.setStreamVolume(stream, max, android.media.AudioManager.FLAG_SHOW_UI)
+                    request.mute -> audio.adjustStreamVolume(stream, android.media.AudioManager.ADJUST_MUTE, android.media.AudioManager.FLAG_SHOW_UI)
+                    else -> repeat(kotlin.math.abs(request.steps)) {
+                        audio.adjustStreamVolume(stream, if (request.steps > 0) android.media.AudioManager.ADJUST_RAISE
+                            else android.media.AudioManager.ADJUST_LOWER, android.media.AudioManager.FLAG_SHOW_UI)
+                    }
+                }
+                val now = audio.getStreamVolume(stream)
+                when {
+                    request.mute -> "소리를 껐어요."
+                    request.toMax -> "볼륨을 최대로 올렸어요."
+                    request.steps > 0 -> "볼륨을 올렸어요. ($now/$max)"
+                    else -> "볼륨을 내렸어요. ($now/$max)"
+                }
+            }
+            is QuickRequest.Timer -> {
+                context.startActivity(Intent(android.provider.AlarmClock.ACTION_SET_TIMER)
+                    .putExtra(android.provider.AlarmClock.EXTRA_LENGTH, request.seconds)
+                    .putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, true)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                val h = request.seconds / 3600; val m = request.seconds % 3600 / 60; val s = request.seconds % 60
+                listOfNotNull(h.takeIf { it > 0 }?.let { "${it}시간" }, m.takeIf { it > 0 }?.let { "${it}분" }, s.takeIf { it > 0 }?.let { "${it}초" })
+                    .joinToString(" ") + " 타이머를 시작했어요."
+            }
+            is QuickRequest.Alarm -> {
+                context.startActivity(Intent(android.provider.AlarmClock.ACTION_SET_ALARM)
+                    .putExtra(android.provider.AlarmClock.EXTRA_HOUR, request.hour)
+                    .putExtra(android.provider.AlarmClock.EXTRA_MINUTES, request.minute)
+                    .putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, true)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                val h = request.hour % 12
+                "${if (request.hour < 12) "오전" else "오후"} ${if (h == 0) 12 else h}시${if (request.minute > 0) " ${request.minute}분" else ""} 알람을 맞췄어요."
+            }
+        }
+    }.onFailure { Log.w(TAG, "quick $request failed", it) }.getOrNull()
 
     private fun endsWithBatchim(word: String): Boolean {
         val c = word.lastOrNull() ?: return false

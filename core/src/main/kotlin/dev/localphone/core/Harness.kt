@@ -257,6 +257,21 @@ object Harness {
         }
     }
 
+    /**
+     * The song named in the player bar (bottom of the screen, no add button beside it): the longest such
+     * text. For "지금 나오는 노래 뭐야?".
+     */
+    fun barSong(view: ScreenView): String? {
+        if (!isPlayer(view)) return null
+        val nodes = view.snapshot.nodes
+        val bottom = view.snapshot.height * 0.86
+        return nodes.withIndex().filter { (i, n) ->
+            n.bounds.top >= bottom && n.bounds.top < view.snapshot.height && !n.clickable && n.ownLabel.length >= 3 &&
+                !Regex("^[\\d:·\\s]+$").matches(n.ownLabel) &&
+                nodes.withIndex().none { (j, m) -> j != i && m.parent == n.parent && addLabel.containsMatchIn(m.ownLabel) }
+        }.maxByOrNull { it.value.ownLabel.length }?.value?.ownLabel?.trim()
+    }
+
     /** The requested song is in the player bar and the pause control shows: it is playing. */
     /**
      * What the player on screen shows: true = playing (its pause control is offered), false = paused

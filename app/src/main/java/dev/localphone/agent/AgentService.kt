@@ -113,7 +113,7 @@ class AgentService : Service() {
                 (0 until (json?.length() ?: 0)).map { json!!.getJSONObject(it).getString("text") }.drop(1)
             }.getOrDefault(emptyList())
             suspend fun runOne(command: String, before: List<HistoryLine>, heard: List<String>): AgentResult {
-                val navigation = NavigationSession.forGoal(command, app.places.mentionedIn(command), heard)
+                val navigation = NavigationSession.forGoal(command, app.places.mentionedIn(command), heard) ?: NavigationSession.forEta(command, heard)
                 val agent = Agent(app.llm, phone,
                     if (app.prefs.useRecipes) app.recipes else RecipeBook({ null }, {}),
                     { app.prefs.noteLines },

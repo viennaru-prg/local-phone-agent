@@ -13,7 +13,9 @@ data class NavigationEvidence(val complete: Boolean, val state: String, val reas
  */
 class NavigationSession(val goal: String, private val names: List<String>, private val app: AppProfile = Harness.navigationApp(),
                         /** Other things the recognizer heard for the destination ("수요 모임" behind "수유 모임"). */
-                        val heard: List<String> = emptyList()) {
+                        val heard: List<String> = emptyList(),
+                        /** "회사까지 얼마나 걸려?": walk to the route preview and read it, never start guidance. */
+                        val eta: Boolean = false) {
     /** What the assistant says once guidance is verified: "회사로 안내를 시작했어요." */
     val spokenStart: String get() = (chosenSpoken ?: answered.lastOrNull() ?: names.firstOrNull())?.takeIf { it.isNotBlank() }?.let { name ->
         val c = name.last()
@@ -67,7 +69,7 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
      * yet), the user is asked "일요모임으로 안내할까요?". Null when there is nothing to confirm.
      */
     fun confirmQuestion(): String? {
-        if (chosen == null || confirmed || evidence.state != "PREVIEW" || !destinationBound) return null
+        if (eta || chosen == null || confirmed || evidence.state != "PREVIEW" || !destinationBound) return null
         return "${withRo(chosenSpoken ?: return null)} 안내할까요?"
     }
 
@@ -77,6 +79,17 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
             (if (evidence.complete) listOfNotNull(names.firstOrNull()) else emptyList())).distinct()
 
     val appPackage: String get() = app.packageName
+
+    /** The route preview's travel time and distance, said for [eta] questions ("회사까지 차로 약 21분, 7.3km예요"). */
+    fun etaAnswer(view: ScreenView): String? {
+        if (!eta || evidence.state != "PREVIEW" || !destinationBound) return null
+        val labels = view.elements.map { it.label }
+        val time = labels.firstNotNullOfOrNull { Regex("(\\d+\\s*시간\\s*)?\\d+\\s*분").find(it)?.value }
+            ?: labels.firstNotNullOfOrNull { Regex("\\d+\\s*시간").find(it)?.value } ?: return null
+        val distance = labels.firstNotNullOfOrNull { Regex("\\d+(?:\\.\\d+)?\\s*(?:km|㎞)").find(it)?.value }
+        val place = chosenSpoken ?: answered.lastOrNull() ?: names.first()
+        return "${place}까지 차로 약 ${time.replace(Regex("\\s+"), " ")}${distance?.let { ", $it" } ?: ""} 걸려요."
+    }
 
     /** What to remember for the answer: the place that was asked about. */
     fun pendingPlace(): String? = chosen
@@ -224,6 +237,7 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
             return null
         }
         if (!destinationBound) return null
+        if (eta) return null // a travel-time question stops at the preview (etaAnswer)
         // A destination the model guessed waits here, on the preview, for the user's yes (confirmQuestion).
         if (chosen != null && !confirmed) return null
         val starts = view.elements.filter { isStart(it.label) }
@@ -272,6 +286,18 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
     companion object {
         private val drivingText = Regex("경로\\s*안내\\s*중|주행\\s*중|경로\\s*안내를\\s*시작합니다")
         const val NAVER_MAP = "com.nhn.android.nmap"
+        /** "회사까지 얼마나 걸려?": the same walk to the place, stopping at its route preview. */
+        fun forEta(goal: String, alternatives: List<String> = emptyList()): NavigationSession? {
+            val target = QuickCommands.etaTarget(goal) ?: return null
+            val names = when (GoalText.normalize(target)) {
+                "집", "우리집", "자택" -> listOf("집", "우리집", "자택")
+                "회사", "우리회사", "직장", "사무실" -> listOf("회사", "우리 회사", "직장", "사무실")
+                else -> listOf(target)
+            }
+            val heard = alternatives.mapNotNull { QuickCommands.etaTarget(it) }.filter { GoalText.normalize(it) != GoalText.normalize(target) }.distinct()
+            return NavigationSession(goal, names, heard = heard, eta = true)
+        }
+
         /** [alternatives]: the recognizer's other hypotheses for the whole command ("수요 모임으로 안내해 줘"). */
         fun forGoal(goal: String, place: Place? = null, alternatives: List<String> = emptyList()): NavigationSession? {
             if (!Router.isNavigationGoal(goal) || !Router.usesNaver(goal)) return null

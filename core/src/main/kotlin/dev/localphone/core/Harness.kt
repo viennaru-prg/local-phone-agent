@@ -20,6 +20,7 @@ object Harness {
     /** Returns an action to take without the model, or null to let the model decide. */
     fun preDecide(goal: String, view: ScreenView, history: List<HistoryLine> = emptyList()): Auto? {
         emptyScreen(view, history)?.let { return it }
+        mediaControl(goal, view, history)?.let { return it }
         if (!ShortcutGoals.allowsUiHeuristics(goal)) return null
         resumePrompt(goal, view)?.let { return it }
         unrelatedSheet(goal, view, history)?.let { return it }
@@ -92,6 +93,30 @@ object Harness {
             (e.selected || (e.kind == Kind.TEXT && e.bounds.bottom <= view.snapshot.height * 0.30)) &&
                 names.all { GoalText.matches(e.label, listOf(it)) }
         }
+    }
+
+    private val playLabel = Regex("^(?:재생|재생하기|play|resume)$", RegexOption.IGNORE_CASE)
+    private val pauseLabel = Regex("^(?:일시정지|일시\\s*정지|정지|pause)$", RegexOption.IGNORE_CASE)
+    private val nextLabel = Regex("^(?:다음\\s*곡|다음|next\\s*track|next|skip\\s*next)$", RegexOption.IGNORE_CASE)
+    private val prevLabel = Regex("^(?:이전\\s*곡|이전|previous\\s*track|previous|prev|skip\\s*previous)$", RegexOption.IGNORE_CASE)
+
+    /** True for a history line that pressed a next / previous control. */
+    fun isSkip(action: String, next: Boolean): Boolean {
+        val label = Regex("^click \"(.*)\"$").matchEntire(action)?.groupValues?.get(1)?.trim() ?: return false
+        return (if (next) nextLabel else prevLabel).matches(label)
+    }
+
+    /**
+     * Plain music commands on a player screen: press its own transport control. Media keys do not
+     * reach a player inside Secure Folder; its play/pause/next buttons work the same in every app.
+     */
+    private fun mediaControl(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
+        val key = Router.simpleMediaKey(goal) ?: return null
+        val pattern = when (key) { MediaKey.PLAY -> playLabel; MediaKey.PAUSE -> pauseLabel; MediaKey.NEXT -> nextLabel; MediaKey.PREVIOUS -> prevLabel }
+        val control = view.elements.filter { it.kind == Kind.BUTTON || it.kind == Kind.ITEM }
+            .filter { it.enabled && pattern.matches(it.label.trim()) }.singleOrNull() ?: return null
+        if (history.takeLast(2).any { it.action == "click \"${control.label}\"" }) return null
+        return Auto(AgentAction.Click(control.id), "음악 앱의 '${control.label}' 버튼")
     }
 
     /** For a search goal, the query has to be visible (typed in a field or shown in results). */

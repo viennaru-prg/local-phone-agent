@@ -42,7 +42,7 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
         } else if (app != null) {
             expectedPackage = app.packageName
             if (!index.launch(app)) return null
-        } else return null
+        } else return DirectGoals.appName(goal)?.let { openInSecureFolder(goal, it, index) }
         val confirmed = withTimeoutOrNull(4500) { // Device Care (battery) can take a few seconds to draw
             while (true) {
                 val view = phone.observe()?.let(ScreenCompactor::compact)
@@ -54,6 +54,38 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
         } == true
         if (!confirmed) return null
         return GoalText.spokenResult(goal, "${app?.label ?: "요청한 화면"}을 열었어요.")
+    }
+
+    /**
+     * Apps inside Samsung Secure Folder are invisible to this profile's launcher APIs: open Secure
+     * Folder and tap the icon whose name matches ("클립스트림" → "Clipstream Player"). Null when
+     * Secure Folder is locked or has no such app, so the screen agent takes over (and asks to unlock).
+     */
+    private suspend fun openInSecureFolder(goal: String, name: String, index: AppIndex): String? {
+        val folder = (index.find("보안 폴더", allowFuzzy = false) as? AppIndex.Match.Found)?.app ?: return null
+        fun matches(label: String) = GoalText.normalize(label).let { it.isNotEmpty() && it.contains(GoalText.normalize(name)) } ||
+            GoalText.soundsLike(name, label)
+        if (!index.launch(folder)) return null
+        val (view, icon) = withTimeoutOrNull(4000) {
+            while (true) {
+                val view = phone.observe()?.let(ScreenCompactor::compact)
+                if (view != null && view.snapshot.packageName == folder.packageName)
+                    view.elements.firstOrNull { it.enabled && matches(it.label) }?.let { return@withTimeoutOrNull view to it }
+                delay(150)
+            }
+            @Suppress("UNREACHABLE_CODE") null
+        } ?: return null
+        if (!phone.perform(view, AgentAction.Click(icon.id))) return null
+        val opened = withTimeoutOrNull(4500) {
+            while (true) {
+                val now = phone.observe()
+                if (now != null && now.packageName != folder.packageName && matches(now.appLabel)) return@withTimeoutOrNull true
+                delay(150)
+            }
+            @Suppress("UNREACHABLE_CODE") false
+        } == true
+        Log.i(TAG, "secure folder open '$name' via '${icon.label}' opened=$opened")
+        return if (opened) GoalText.spokenResult(goal, "$name 열었어요.") else null
     }
 
     override suspend fun navigate(place: Place): String? {

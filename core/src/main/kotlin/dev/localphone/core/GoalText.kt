@@ -12,6 +12,38 @@ object GoalText {
 
     fun normalize(s: String) = s.lowercase().replace(Regex("[\\s.,!?~·'\"()\\[\\]]+"), "")
 
+    /**
+     * Consonant skeleton for comparing a spoken Korean name with a Latin app name:
+     * "클립스트림" and "Clipstream" both become "KLPSTLM". Vowels and ㅇ/h are dropped, l/r merge.
+     */
+    fun skeleton(s: String): String {
+        val out = StringBuilder()
+        fun add(c: Char) { if (out.lastOrNull() != c) out.append(c) }
+        val initial = "KKNTTLMPPSSXSSSKTPX" // ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ
+        val final = " KKKNNNTLKMLLLPLMPPSSXSSKTPX" // none ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ
+        val latin = s.lowercase().replace("ph", "p").replace("ch", "s").replace("sh", "s").replace("th", "t")
+            .replace("ck", "k").replace("ng", "").replace("x", "ks").replace("qu", "k")
+        for (c in latin) when (c) {
+            in '가'..'힣' -> {
+                val i = c - '가'
+                initial[i / 588].takeIf { it != 'X' }?.let(::add)
+                final[i % 28].takeIf { it != ' ' && it != 'X' }?.let(::add)
+            }
+            'k', 'g', 'q', 'c' -> add('K'); 't', 'd' -> add('T'); 'p', 'b', 'f', 'v' -> add('P')
+            's', 'z', 'j' -> add('S'); 'l', 'r' -> add('L'); 'm' -> add('M'); 'n' -> add('N')
+            else -> {}
+        }
+        return out.toString()
+    }
+
+    /** "클립스트림" ~ "Clipstream Player": the same name written in Hangul or Latin letters. */
+    fun soundsLike(spoken: String, label: String): Boolean {
+        val wanted = skeleton(spoken)
+        if (wanted.length < 4) return false
+        val words = label.trim().split(Regex("\\s+"))
+        return words.indices.any { start -> (start until words.size).any { end -> skeleton(words.subList(start, end + 1).joinToString("")) == wanted } }
+    }
+
     /** "회사로 안내해줘" -> [회사, 안내]; "음악 재생해줘" -> [음악, 재생]. */
     fun words(goal: String): List<String> = goal.split(Regex("\\s+")).mapNotNull { raw ->
         var w = normalize(raw)

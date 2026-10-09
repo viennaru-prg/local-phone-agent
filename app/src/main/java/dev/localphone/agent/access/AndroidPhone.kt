@@ -72,6 +72,19 @@ class AndroidPhone(private val context: Context) : Phone {
         return true
     }
 
+    override suspend fun leaveUnreadable(): Boolean {
+        val s = service ?: return false
+        for (step in 0..1) {
+            if (s.observationDiagnostic?.startsWith("NO_ROOT") != true) return step > 0
+            if (step == 0) s.back() else s.home()
+            delay(700)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { s.observe() }
+        }
+        return s.observationDiagnostic?.startsWith("NO_ROOT") != true
+    }
+
+    override fun musicActive(): Boolean? = runCatching { context.getSystemService(AudioManager::class.java).isMusicActive }.getOrNull()
+
     override fun now(): Long = SystemClock.elapsedRealtime()
 }
 

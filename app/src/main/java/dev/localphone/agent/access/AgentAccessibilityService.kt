@@ -102,7 +102,10 @@ class AgentAccessibilityService : AccessibilityService() {
             return null
         }
         observationDiagnostic = "OK package=$pkg window=${window?.id} nodes=${nodes.size}"
-        val snapshot = Snapshot(pkg, appLabel(pkg), nodes, display.widthPixels, display.heightPixels, home = pkg == launcherPackage)
+        // Apps in another profile (Secure Folder, user 150) are not visible to this user's PackageManager;
+        // the window title ("Clipstream Player") is the name the user sees.
+        val label = appLabel(pkg).takeIf { it != pkg } ?: window?.title?.toString()?.takeIf { it.isNotBlank() } ?: pkg
+        val snapshot = Snapshot(pkg, label, nodes, display.widthPixels, display.heightPixels, home = pkg == launcherPackage)
         synchronized(recent) {
             recent.addLast(snapshot); windowOf[snapshot] = window?.id ?: rootWindowId
             while (recent.size > 6) windowOf.remove(recent.removeFirst())
@@ -189,6 +192,7 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     fun back() = performGlobalAction(GLOBAL_ACTION_BACK)
+    fun home() = performGlobalAction(GLOBAL_ACTION_HOME)
 
     private suspend fun tap(x: Float, y: Float, durationMs: Long): Boolean = withOverlayHidden {
         gesture(GestureDescription.StrokeDescription(Path().apply { moveTo(x, y) }, 0, durationMs))

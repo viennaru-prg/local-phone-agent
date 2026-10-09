@@ -20,6 +20,13 @@ interface Phone {
     suspend fun openApp(name: String): OpenAppResult
     fun matchesApp(view: ScreenView, name: String): Boolean = GoalText.normalize(view.snapshot.appLabel) == GoalText.normalize(name)
     suspend fun media(key: MediaKey): Boolean
+    /**
+     * The top window refuses accessibility (a protected settings screen such as "install unknown
+     * apps"): step out of it (back, then home). False when nothing could be done.
+     */
+    suspend fun leaveUnreadable(): Boolean = false
+    /** Whether any music is audible now (system audio state), or null when unknown. */
+    fun musicActive(): Boolean? = null
     fun now(): Long
 }
 
@@ -97,6 +104,8 @@ class Agent(
     }
 
     private suspend fun verify(goal: String, run: Run, view: ScreenView, answer: String = ""): Verdict {
+        mediaEvidence(goal, run)?.let { return Verdict(true, it) }
+        if (Router.simpleMediaKey(goal) != null && phone.musicActive() != null) return Verdict(false, "음악 상태가 아직 요청과 다름")
         navigation?.let {
             val evidence = it.observe(view)
             return Verdict(evidence.complete, evidence.reason)
@@ -133,6 +142,39 @@ class Agent(
         return verdict
     }
 
+    /**
+     * "음악 재생해줘" is done when music is audible, "멈춰" when it is not; "다음 곡" needs the skip control
+     * pressed while music plays. A player inside Secure Folder ignores media keys from this profile, so
+     * the agent presses its on-screen controls and this audio state is the proof.
+     */
+    private fun mediaEvidence(goal: String, run: Run): String? {
+        val key = Router.simpleMediaKey(goal) ?: return null
+        val active = phone.musicActive() ?: return null
+        val pressed = run.history.any { it.action.startsWith("click") && it.outcome.contains("바뀜") }
+        return when (key) {
+            MediaKey.PLAY -> if (active) "음악을 재생했어요." else null
+            MediaKey.PAUSE -> if (!active) (if (pressed) "음악을 멈췄어요." else "지금 재생 중인 음악이 없어요.") else null
+            MediaKey.NEXT -> if (active && pressed && run.history.any { Harness.isSkip(it.action, next = true) }) "다음 곡으로 넘겼어요." else null
+            MediaKey.PREVIOUS -> if (active && pressed && run.history.any { Harness.isSkip(it.action, next = false) }) "이전 곡으로 갔어요." else null
+        }
+    }
+
+    private fun expectedSwitch(goal: String, run: Run, now: ScreenView): Boolean {
+        val label = GoalText.normalize(now.snapshot.appLabel)
+        if (label.isEmpty()) return false
+        val clicked = run.history.lastOrNull { it.action.startsWith("click") || it.action.startsWith("open_app") }?.action
+            ?.let { Regex("\"(.*?)\"").find(it)?.groupValues?.get(1) }?.let(GoalText::normalize).orEmpty()
+        return (clicked.length >= 2 && (clicked.contains(label) || label.contains(clicked))) ||
+            GoalText.relevantNotes(goal, notes()).any { GoalText.normalize(it).contains(label) } || GoalText.matches(label, GoalText.targetWords(goal))
+    }
+
+    private fun appInFront(view: ScreenView, name: String): Boolean {
+        val wanted = GoalText.normalize(name)
+        val label = GoalText.normalize(view.snapshot.appLabel)
+        return wanted.length >= 2 && label.isNotEmpty() && !view.snapshot.home &&
+            (label.contains(wanted) || wanted.contains(label) || GoalText.soundsLike(name, view.snapshot.appLabel))
+    }
+
     private fun finish(run: Run, goal: String, modelSay: String): AgentResult {
         val say = GoalText.spokenResult(goal, modelSay)
         val learned = run.learned.isNotEmpty() && (run.modelSteps > 1 || !run.replayed)
@@ -152,7 +194,7 @@ class Agent(
         // Resolve any explicitly named installed app through Android; never spend a model call
         // rediscovering the launcher. The complete goal remains unchanged for the screen loop.
         GoalText.namedApp(goal)?.let { app ->
-            if (!phone.matchesApp(view, app)) {
+            if (!phone.matchesApp(view, app) && !appInFront(view, app)) {
                 val (outcome, next) = execute(run, AgentAction.OpenApp(app), view)
                 listener.step(StepRecord(0, "android_api", "", "", "open_app \"$app\"", outcome, "명령에 명시된 앱에서 전체 목표를 계속 수행", 0, phone.now() - started))
                 view = next
@@ -175,6 +217,15 @@ class Agent(
             if (Harness.openScreenEvidence(goal, view)) {
                 listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "요청한 화면의 제목·선택 탭 확인", 0, phone.now() - started))
                 return finish(run, goal, "")
+            }
+            // Hard evidence for music and app goals: the system audio state / the app in front.
+            mediaEvidence(goal, run)?.let { say ->
+                listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "시스템 오디오 상태 확인", 0, phone.now() - started))
+                return finish(run, goal, say)
+            }
+            DirectGoals.appName(goal)?.takeIf { name -> appInFront(view, name) }?.let { name ->
+                listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "요청한 앱이 전면에 있음", 0, phone.now() - started))
+                return finish(run, goal, "$name 열었어요.")
             }
             // Lock screens are the user's: ask them to unlock and wait, never touch the pattern/PIN.
             if (Harness.authScreen(view)) {
@@ -207,7 +258,8 @@ class Agent(
             // so explore something else (another item, scroll, search) instead of circling.
             val deadEnds = run.tried[fingerprint].orEmpty()
             val excluded = view.elements.filter { e ->
-                (run.ineffective[fingerprint to "click \"${e.label}\""] ?: 0) > 0 || "click \"${e.label}\"" in deadEnds
+                (run.ineffective[fingerprint to "click \"${e.label}\""] ?: 0) > 0 || "click \"${e.label}\"" in deadEnds ||
+                    Guard.blocked(goal, AgentAction.Click(e.id), view) != null
             }.map { it.id }.toSet()
             if (deadEnds.isNotEmpty() && run.history.lastOrNull()?.action != "다시 온 화면") run.history += HistoryLine("다시 온 화면",
                 "이미 열어 본 ${deadEnds.joinToString(", ") { it.removePrefix("click ") }}에는 답이 없었음. 다른 항목·scroll·검색을 시도")
@@ -230,6 +282,12 @@ class Agent(
             // A lock screen that appeared meanwhile (Secure Folder pattern, shown by Settings) is not a
             // foreign app: hand it to the unlock request at the top of the loop.
             if (Harness.authScreen(liveView)) { view = liveView; continue }
+            // An app the last step opened ("Clipstream Player" icon in Secure Folder) may come to the
+            // front a little later. That is the expected result, not a foreign app: decide again on it.
+            if (liveView.snapshot.packageName != view.snapshot.packageName && expectedSwitch(goal, run, liveView)) {
+                run.history += HistoryLine("앱 전환", "열린 앱: ${liveView.snapshot.appLabel}")
+                view = liveView; continue
+            }
             if (liveView.snapshot.packageName != view.snapshot.packageName) {
                 listener.step(StepRecord(index, "harness", "", raw, "stop", "전면 앱 전환으로 중단", "모델 계산 중 다른 앱이 전면에 나타나 이전 목표로 조작하지 않음", modelMs, phone.now() - started))
                 return fail(run, "실행 중 다른 앱으로 전환되어 중단했어요. 원래 작업 화면에서 다시 요청해 주세요.")
@@ -518,6 +576,12 @@ class Agent(
             phone.observe()?.let { return ScreenCompactor.compact(it, run.goal, run.focus).also(run.facts::observe) }
             delay(200)
         }
+        if (!phone.leaveUnreadable()) return null
+        run.history += HistoryLine("읽을 수 없는 화면", "보호된 화면이라 빠져나옴")
+        repeat(10) {
+            phone.observe()?.let { return ScreenCompactor.compact(it, run.goal, run.focus).also(run.facts::observe) }
+            delay(200)
+        }
         return null
     }
 
@@ -577,6 +641,8 @@ object Guard {
     private val protected = Regex("결제|구매하기|송금|이체|비밀번호|인증번호|권한\\s*허용|^허용$|모두\\s*삭제|계정\\s*삭제|탈퇴|password|pay now|purchase", RegexOption.IGNORE_CASE)
     private val delete = Regex("삭제|delete|remove|제거|초기화|reset", RegexOption.IGNORE_CASE)
     private val swap = Regex("출발지.*도착지.*(?:전환|변경|바꾸기)|swap", RegexOption.IGNORE_CASE)
+    private val install = Regex("설치|업데이트|새\\s*버전|install|update", RegexOption.IGNORE_CASE)
+    private val create = Regex("만들기|생성|새로\\s*만들|이름\\s*변경|편집|\\bcreate\\b|\\brename\\b|\\bedit\\b", RegexOption.IGNORE_CASE)
     fun blocked(goal: String, action: AgentAction, view: ScreenView): String? {
         if (action is AgentAction.Media && !Router.allowsMedia(goal)) return "명령에 없는 미디어 동작이라 실행하지 않음"
         val id = when (action) {
@@ -590,6 +656,11 @@ object Guard {
         if (protected.containsMatchIn(label)) return "보호된 동작이라 실행하지 않음"
         // Swapping origin and destination silently reverses a route the user asked for.
         if (swap.containsMatchIn(label) && !Regex("출발").containsMatchIn(goal)) return "출발지와 도착지를 바꾸는 버튼이라 누르지 않음"
+        // Creating/renaming/editing things was never asked for by "음악 재생해줘" (it opened 재생목록 만들기 3 times).
+        if (create.containsMatchIn(label) && !Regex("만들|생성|추가|이름|변경|편집|바꿔|새로|create|rename|edit|add", RegexOption.IGNORE_CASE).containsMatchIn(goal))
+            return "목표에 없는 만들기·편집 동작이라 실행하지 않음"
+        // An app's "새 버전 1.1.108을 설치할 수 있습니다" banner led into the unknown-sources settings.
+        if (install.containsMatchIn(label) && !install.containsMatchIn(goal)) return "목표에 없는 설치·업데이트라 누르지 않음"
         // Deleting is allowed only when the user asked to remove something ("빼줘", "삭제해줘", ...).
         if (delete.containsMatchIn(label) && !Regex("삭제|지워|빼|제거|remove|delete", RegexOption.IGNORE_CASE).containsMatchIn(goal))
             return "목표에 없는 삭제 동작이라 실행하지 않음"

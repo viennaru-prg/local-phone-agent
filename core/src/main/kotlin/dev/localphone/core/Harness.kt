@@ -15,7 +15,9 @@ object Harness {
     private val auth = Regex("잠금\\s*해제|패턴을\\s*그리|비밀번호를?\\s*입력|PIN\\s*(?:을|를)?\\s*입력|지문|생체\\s*인증|본인\\s*인증|unlock|enter (?:your )?(?:pin|password)|draw (?:your )?pattern", RegexOption.IGNORE_CASE)
 
     /** A lock / authentication screen (Secure Folder pattern, app PIN). Only the user may get past it. */
-    fun authScreen(view: ScreenView): Boolean = view.elements.any { auth.containsMatchIn(it.label) }
+    /** A lock prompt is text on the screen ("패턴을 그리세요"); Settings lists "지문", "잠금 해제" as menu entries. */
+    fun authScreen(view: ScreenView): Boolean = !view.snapshot.packageName.startsWith("com.android.settings") &&
+        view.elements.any { it.kind == Kind.TEXT && auth.containsMatchIn(it.label) }
 
     /** Returns an action to take without the model, or null to let the model decide. */
     fun preDecide(goal: String, view: ScreenView, history: List<HistoryLine> = emptyList()): Auto? {
@@ -114,7 +116,7 @@ object Harness {
      * reach a player inside Secure Folder; its play/pause/next buttons work the same in every app.
      */
     private fun mediaControl(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
-        val key = Router.simpleMediaKey(goal) ?: return null
+        val key = Router.mediaKeyIn(goal) ?: return null
         val pattern = when (key) { MediaKey.PLAY -> playLabel; MediaKey.PAUSE -> pauseLabel; MediaKey.NEXT -> nextLabel; MediaKey.PREVIOUS -> prevLabel }
         val control = view.elements.filter { it.kind == Kind.BUTTON || it.kind == Kind.ITEM }
             .filter { it.enabled && pattern.matches(it.label.trim()) }.singleOrNull() ?: return null
@@ -125,12 +127,15 @@ object Harness {
     private val addLabel = Regex("추가|담기|\\badd\\b",RegexOption.IGNORE_CASE)
 
     /** The add button that was pressed for [query], if any ("click "현재 재생목록에 추가 · 아이유(IU) - 좋은 날"" → 바뀜). */
-    fun addedRow(query: String, history: List<HistoryLine>): String? = history.asReversed().firstNotNullOfOrNull { h ->
-        val label = Regex("^click \"(.*)\"$").matchEntire(h.action)?.groupValues?.get(1) ?: return@firstNotNullOfOrNull null
+    fun addedRow(query: String, history: List<HistoryLine>): String? = addedRows(query, history).lastOrNull()
+
+    /** Every result row added for [query] so far, in order. */
+    fun addedRows(query: String, history: List<HistoryLine>): List<String> = history.mapNotNull { h ->
+        val label = Regex("^click \"(.*)\"$").matchEntire(h.action)?.groupValues?.get(1) ?: return@mapNotNull null
         val row = label.substringAfter(" · ", "")
         row.takeIf { addLabel.containsMatchIn(label.substringBefore(" · ")) && it.isNotEmpty() && h.outcome.contains("바뀜") &&
             GoalText.rowScore(query, it) * 2 >= query.trim().split(Regex("\\s+")).size }
-    }
+    }.distinct()
 
     /**
      * "<노래> 재생목록에 추가해줘" in a music app: type the song into its search field, press its search
@@ -216,16 +221,19 @@ object Harness {
 
     private fun playlistAdd(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
         val query = GoalText.playlistAdd(goal) ?: return null
-        if (view.snapshot.home || addedRow(query, history) != null) return null
+        val added = addedRows(query, history)
+        if (view.snapshot.home || added.size >= GoalText.playlistAddCount(goal)) return null
         val wanted = query.trim().split(Regex("\\s+")).size
         val adds = view.elements.filter { (it.kind == Kind.BUTTON || it.kind == Kind.ITEM) && it.enabled && it.label.contains(" · ") &&
             addLabel.containsMatchIn(it.label.substringBefore(" · ")) }
         if (adds.isNotEmpty()) {
-            val best = adds.maxByOrNull { GoalText.rowScore(query, it.label.substringAfter(" · ")) }!!
-            if (GoalText.rowScore(query, best.label.substringAfter(" · ")) * 2 >= wanted &&
-                history.none { it.action == "click \"${best.label}\"" })
+            // "아이유 노래 3곡": the best-matching rows not added yet, top of the results first.
+            val best = adds.filter { a -> a.label.substringAfter(" · ") !in added && history.none { it.action == "click \"${a.label}\"" } }
+                .sortedByDescending { GoalText.rowScore(query, it.label.substringAfter(" · ")) }.firstOrNull()
+            if (best != null && GoalText.rowScore(query, best.label.substringAfter(" · ")) * 2 >= wanted)
                 return Auto(AgentAction.Click(best.id), "검색 결과 '${best.label.substringAfter(" · ").take(30)}'를 재생목록에 추가")
         }
+        if (added.isNotEmpty()) return null // fewer matching results than asked: keep what was added
         val q = GoalText.normalize(query)
         val inputs = view.inputs.filter { it.enabled }
         val field = inputs.firstOrNull { Regex("검색|search|찾기", RegexOption.IGNORE_CASE).containsMatchIn(it.label) }

@@ -55,6 +55,17 @@ class PlayerScreenTest {
         assertTrue(calls.isEmpty(), "no model call needed: $calls")
     }
 
+    @Test fun playInsideANamedAppUsesThePlayersButton() = runTest {
+        assertEquals(MediaKey.PLAY, Router.mediaKeyIn("클립스트림에서 음악 틀어줘"))
+        assertEquals(null, Router.simpleMediaKey("클립스트림에서 음악 틀어줘"))
+        val phone = FakePlayer(this)
+        val calls = mutableListOf<String>()
+        val result = Agent(stubbornModel(calls), phone, RecipeBook({ null }, {}), { emptyList() }, AgentConfig(withNote = false)).run("클립스트림에서 음악 틀어줘")
+        assertEquals(Outcome.DONE, result.outcome, result.history.joinToString("\n"))
+        assertTrue(phone.playing)
+        assertTrue(calls.isEmpty(), "no model call: $calls")
+    }
+
     @Test fun pauseWhenNothingPlaysSaysSo() = runTest {
         val phone = FakePlayer(this)
         val result = Agent(stubbornModel(mutableListOf()), phone, RecipeBook({ null }, {}), { emptyList() }, AgentConfig(withNote = false)).run("음악 멈춰")

@@ -9,7 +9,8 @@ object DirectGoals {
             SettingsScreen.BLUETOOTH -> listOf("블루투스", "bluetooth")
             SettingsScreen.DISPLAY -> listOf("디스플레이", "display")
             SettingsScreen.SOUND -> listOf("소리및진동", "소리", "sound")
-            SettingsScreen.BATTERY -> listOf("배터리", "battery")
+            // Device Care titles the screen POWER_USAGE_SUMMARY opens "배터리 활동" on One UI 7+.
+            SettingsScreen.BATTERY -> listOf("배터리", "battery", "배터리활동", "배터리사용량", "batteryusage")
         }
         return view.elements.any { e ->
             names.any { GoalText.normalize(e.label) == it } &&

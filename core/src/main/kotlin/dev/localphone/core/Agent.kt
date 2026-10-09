@@ -108,7 +108,7 @@ class Agent(
         mediaEvidence(goal, run)?.let { return Verdict(true, it) }
         playlistEvidence(goal, run, view)?.let { return Verdict(true, it) }
         if (Harness.guidanceEnded(goal, view, run.history)) return Verdict(true, "길안내를 종료했어요.")
-        if (Router.simpleMediaKey(goal) != null && phone.musicActive() != null) return Verdict(false, "음악 상태가 아직 요청과 다름")
+        if (Router.mediaKeyIn(goal) != null && phone.musicActive() != null) return Verdict(false, "음악 상태가 아직 요청과 다름")
         navigation?.let {
             val evidence = it.observe(view)
             return Verdict(evidence.complete, if (evidence.complete) it.spokenStart else evidence.reason)
@@ -153,8 +153,10 @@ class Agent(
     private fun playlistEvidence(goal: String, run: Run, view: ScreenView): String? {
         fun obj(q: String) = q + if (q.last() in '가'..'힣' && (q.last() - '가') % 28 != 0) "을" else "를"
         GoalText.playlistAdd(goal)?.let { query ->
-            Harness.addedRow(query, run.history) ?: return null
-            return "${obj(query)} 재생목록에 추가했어요."
+            val added = Harness.addedRows(query, run.history)
+            val count = GoalText.playlistAddCount(goal)
+            if (added.isEmpty() || (added.size < count && Harness.preDecide(goal, view, run.history) != null)) return null
+            return if (count == 1) "${obj(query)} 재생목록에 추가했어요." else "$query 노래 ${added.size}곡을 재생목록에 추가했어요."
         }
         val query = GoalText.playlistRemove(goal) ?: return null
         // Removed = the row whose end icon was tapped is no longer on screen.
@@ -163,7 +165,7 @@ class Agent(
     }
 
     private fun mediaEvidence(goal: String, run: Run): String? {
-        val key = Router.simpleMediaKey(goal) ?: return null
+        val key = Router.mediaKeyIn(goal) ?: return null
         val active = phone.musicActive() ?: return null
         val pressed = run.history.any { it.action.startsWith("click") && it.outcome.contains("바뀜") }
         return when (key) {
@@ -303,6 +305,8 @@ class Agent(
             val excludedLong = view.elements.filter { e -> (run.ineffective[fingerprint to "long_click \"${e.label}\""] ?: 0) > 0 }.map { it.id }.toSet()
             val excludedOps = buildSet {
                 if ((run.ineffective[fingerprint to "back"] ?: 0) > 0) add("back")
+                // "open_app 설정" seven times in a row while 설정 was already in front.
+                if (run.history.lastOrNull()?.let { it.action.startsWith("open_app") && it.outcome.contains("이미 열려") } == true) add("open")
                 if (navigation == null && !CompletionGrounding.hasOutcome(goal,view,run.history)) add("done")
             }
             val raw = model.decide(prompt, ActionGrammar.forView(view, config.withNote, excluded, excludedLong, excludedOps))

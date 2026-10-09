@@ -49,8 +49,10 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
         val confirmed = withTimeoutOrNull(4500) { // Device Care (battery) can take a few seconds to draw
             while (true) {
                 val view = phone.observe()?.let(ScreenCompactor::compact)
-                if (view?.snapshot?.packageName == expectedPackage &&
-                    (screen == null || DirectGoals.screenConfirmed(screen, view))) return@withTimeoutOrNull true
+                // Settings may hand the intent on to another app (POWER_USAGE_SUMMARY → Device Care):
+                // for a settings screen its own title is the proof, whichever package shows it.
+                if (view != null && (if (screen != null) DirectGoals.screenConfirmed(screen, view)
+                        else view.snapshot.packageName == expectedPackage)) return@withTimeoutOrNull true
                 delay(100)
             }
             @Suppress("UNREACHABLE_CODE") false

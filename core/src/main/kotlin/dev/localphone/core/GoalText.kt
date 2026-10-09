@@ -124,8 +124,18 @@ object GoalText {
         val g = goal.trim().let { if (namedApp(it) != null) it.substringAfter("에서").trim() else it }
         val m = Regex("^(.+?)\\s*(?:(?:현재\\s*)?(?:재생\\s*목록|플레이\\s*리스트)\\s*에?\\s*)?(?:추가|넣어|담아)\\s*(?:해\\s*)?(?:줘|주세요|줄래)?\\s*[.!?]?$")
             .matchEntire(g) ?: return null
-        val query = m.groupValues[1].trim().replace(Regex("\\s*(?:을|를)$"), "").replace(Regex("\\s+(?:노래|음악|곡)$"), "").trim()
+        val query = m.groupValues[1].trim().replace(Regex("\\s*(?:을|를)$"), "").replace(Regex("\\s*$countWord\\s*(?:곡|개)$"), "")
+            .replace(Regex("\\s*(?:을|를)$"), "").replace(Regex("\\s+(?:노래|음악|곡)$"), "").trim()
         return query.takeIf { it.length >= 2 && !Regex("재생\\s*목록|플레이\\s*리스트").containsMatchIn(it) }
+    }
+
+    private const val countWord = "(\\d+|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)"
+
+    /** "아이유 노래 3곡 추가해줘" / "세 곡" -> 3; 1 when the goal names no count. */
+    fun playlistAddCount(goal: String): Int {
+        val word = Regex("$countWord\\s*(?:곡|개)").find(goal)?.groupValues?.get(1) ?: return 1
+        val n = listOf("한", "두", "세", "네", "다섯", "여섯", "일곱", "여덟", "아홉", "열").indexOf(word).takeIf { it >= 0 }?.plus(1) ?: word.toInt()
+        return n.coerceIn(1, 10)
     }
 
     /** "클립스트림에서 아이유 좋은날 재생목록에서 빼줘" -> "아이유 좋은날": the song to take out of the playlist. */

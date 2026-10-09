@@ -61,6 +61,22 @@ class PlaylistAddTest {
         assertEquals(null, GoalText.playlistAdd("회사로 안내해줘"))
     }
 
+    @Test fun aCountAddsThatManyDistinctMatchingRows() = runTest {
+        assertEquals("아이유", GoalText.playlistAdd("아이유 노래 3곡 추가해줘"))
+        assertEquals(3, GoalText.playlistAddCount("아이유 노래 세 곡 재생목록에 넣어줘"))
+        assertEquals(1, GoalText.playlistAddCount("아이유 좋은날 추가해줘"))
+        val phone = FakeClipStream(this)
+        val model = object : LanguageModel {
+            override suspend fun decide(prompt: ModelPrompt, grammar: String) = """{"action":"back","check":false}"""
+        }
+        val result = Agent(model, phone, RecipeBook({ null }, {}), { emptyList() }, AgentConfig(withNote = false)).run("좋은 날 2곡 추가해줘")
+        val log = result.history.joinToString("\n")
+        assertEquals(Outcome.DONE, result.outcome, log)
+        assertEquals(4, phone.playlist.size, log)
+        assertEquals(phone.playlist.drop(2).distinct().size, 2, log)
+        assertEquals("좋은 날 노래 2곡을 재생목록에 추가했어요.", result.say, log)
+    }
+
     @Test fun removeGoalsNameTheSong() {
         assertEquals("더 크로스", GoalText.playlistRemove("클립스트림에서 더 크로스 재생목록에서 빼줘"))
         assertEquals("더 크로스", GoalText.playlistRemove("더 크로스 재생목록에서 빼줘"))

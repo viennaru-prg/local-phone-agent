@@ -101,6 +101,13 @@ object Router {
         }
     }
 
+    /**
+     * The transport control a goal asks for, also inside a named app ("클립스트림에서 음악 틀어줘"):
+     * there the player's own button is pressed on screen instead of a system media key.
+     */
+    fun mediaKeyIn(goal: String): MediaKey? = simpleMediaKey(goal)
+        ?: GoalText.namedApp(goal)?.let { if (GoalScope.multiple(goal)) null else simpleMediaKey(goal.trim().substringAfter("에서").trim()) }
+
     fun allowsMedia(goal: String): Boolean = simpleMediaKey(goal) != null ||
         (GoalScope.multiple(goal) && GoalScope.parts(goal).any { simpleMediaKey(it) != null })
 

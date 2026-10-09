@@ -47,6 +47,12 @@ class VoiceActivity : Activity() {
         val typed = if (!BuildConfig.ADB_GOALS) null else intent.getStringExtra("goal_b64")
             ?.let { String(android.util.Base64.decode(it, android.util.Base64.DEFAULT), Charsets.UTF_8) }
             ?: intent.getStringExtra(AgentService.EXTRA_GOAL)
+        // Debug builds: `--el dump_after 3000` logs the screen the agent sees once this sheet is gone.
+        if (BuildConfig.ADB_GOALS && intent.hasExtra("dump_after")) {
+            startForegroundService(Intent(this, AgentService::class.java).setAction(AgentService.ACTION_DUMP)
+                .putExtra(AgentService.EXTRA_DELAY, intent.getLongExtra("dump_after", 2000)))
+            finish(); return
+        }
         android.util.Log.i("AgentVoice", "typed goal=${typed ?: "(none, listening)"}")
         if (!typed.isNullOrBlank()) { origin = "ADB_TEXT"; submit(typed); return }
         val accessibilityEnabled = getSystemService(android.view.accessibility.AccessibilityManager::class.java)

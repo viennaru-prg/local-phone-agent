@@ -48,6 +48,17 @@ class AgentService : Service() {
                 val answer = intent.getStringExtra(EXTRA_GOAL).orEmpty()
                 start(p.goal, p.history + HistoryLine("사용자 답변", answer), intent)
             } ?: finish("이어갈 질문이 없습니다. 명령을 다시 말씀해 주세요.", speak = true, id = runId)
+            // Debug builds: log what the agent would see on the current screen after a delay (other app in front).
+            ACTION_DUMP -> if (BuildConfig.ADB_GOALS) scope.launch {
+                delay(intent.getLongExtra(EXTRA_DELAY, 2000))
+                val snapshot = AndroidPhone(this@AgentService).observe()
+                val view = snapshot?.let(ScreenCompactor::compact)
+                Log.i("AgentDump", "package=${snapshot?.packageName} label=${snapshot?.appLabel} home=${snapshot?.home} nodes=${snapshot?.nodes?.size} " +
+                    "diag=${AgentAccessibilityService.instance?.observationDiagnostic}")
+                view?.render()?.lines()?.forEach { Log.i("AgentDump", it) }
+                Log.i("AgentDump", "END")
+                if (job?.isActive != true) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+            }
             else -> { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
         }
         return START_NOT_STICKY
@@ -153,6 +164,8 @@ class AgentService : Service() {
         const val ACTION_RUN = "run"
         const val ACTION_ANSWER = "answer"
         const val ACTION_STOP = "stop"
+        const val ACTION_DUMP = "dump"
+        const val EXTRA_DELAY = "delay"
         const val EXTRA_GOAL = "goal"
         const val EXTRA_ORIGIN = "origin"
         const val EXTRA_SPEECH = "speech_diagnostics"

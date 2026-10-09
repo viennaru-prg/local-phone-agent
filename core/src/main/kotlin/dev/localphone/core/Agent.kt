@@ -74,6 +74,7 @@ class Agent(
         val history = mutableListOf<HistoryLine>()
         val learned = mutableListOf<RecipeStep>()
         var noChange = 0
+        var waitedForHarness = false
         var badOutput = 0
         var replayed = false
         var modelSteps = 0
@@ -109,7 +110,7 @@ class Agent(
         if (Router.simpleMediaKey(goal) != null && phone.musicActive() != null) return Verdict(false, "음악 상태가 아직 요청과 다름")
         navigation?.let {
             val evidence = it.observe(view)
-            return Verdict(evidence.complete, evidence.reason)
+            return Verdict(evidence.complete, if (evidence.complete) it.spokenStart else evidence.reason)
         }
         CompletionGrounding.conflictingChoice(goal,view)?.let { reason ->
             listener.step(StepRecord(run.history.size,"harness_verify",view.render(),"","verify","검증 실패",reason,0,phone.now()-run.started))
@@ -225,7 +226,7 @@ class Agent(
             index++
             navigation?.observe(view)?.takeIf { it.complete }?.let {
                 listener.step(StepRecord(index, "navigation", view.render(), "", "verify", "완료", it.reason, 0, phone.now() - started))
-                return finish(run, goal, "길안내를 시작했어요.")
+                return finish(run, goal, navigation?.spokenStart ?: "길안내를 시작했어요.")
             }
             if (Harness.openScreenEvidence(goal, view)) {
                 listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "요청한 화면의 제목·선택 탭 확인", 0, phone.now() - started))
@@ -266,6 +267,19 @@ class Agent(
                 view = next
                 if (run.noChange >= config.maxNoChange) return fail(run, "화면이 더 이상 바뀌지 않아 중단했습니다.")
                 continue
+            }
+            // A just-opened app is often still drawing (NAVER Map's splash): a 26 s model call on it was
+            // discarded when the real screen appeared. Before the first model call, give the screen up to
+            // 2.5 s to show something the harness can act on.
+            if (run.modelSteps == 0 && !run.waitedForHarness) {
+                run.waitedForHarness = true
+                var ready: ScreenView? = null
+                for (attempt in 1..10) {
+                    delay(250)
+                    val fresh = phone.observe()?.let { ScreenCompactor.compact(it, goal, run.focus) } ?: continue
+                    if ((navigation?.nextAction(fresh, phone.now()) ?: Harness.preDecide(goal, fresh, run.history)) != null) { ready = fresh; break }
+                }
+                if (ready != null) { view = ready; continue }
             }
             listener.progress("다음 동작 판단 중… ($index)")
             val prompt = Prompts.step(goal, notes(), run.history, view, config.withNote, run.facts.lines())

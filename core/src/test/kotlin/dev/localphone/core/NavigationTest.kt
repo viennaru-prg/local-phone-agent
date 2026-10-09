@@ -32,6 +32,34 @@ class NavigationTest {
     }
     private fun session() = NavigationSession.forGoal("회사로 안내해 줘")!!
 
+    @Test fun guidanceFromBeforeTheCommandIsEndedFromTheDrawerThenRestarted() {
+        fun items(v: ScreenView) = v.copy(elements = v.elements.map { e -> e.copy(kind = Kind.ITEM) })
+        val s = session()
+        // The live driving screen: no destination name, only its reroute / drawer controls.
+        val driving = items(navView("고매로20번길", "경로 다시 계산 (v reroute)", "메뉴·옵션 열기 (v drawer)", "8:18 PM 7.3 km"))
+        s.beforeDispatch(driving)
+        assertFalse(s.observe(driving).complete)
+        assertEquals("ACTIVE_UNBOUND", s.evidence.state)
+        assertEquals(AgentAction.Click(3), s.nextAction(driving, 0)?.action)
+        val drawer = items(navView("다른 경로", "수원시 팔달구 고등동", "안내 종료", "경로 다시 계산 (v reroute)", "메뉴·옵션 열기 (v drawer)"))
+        s.observe(drawer)
+        assertEquals(AgentAction.Click(3), s.nextAction(drawer, 0)?.action)
+        // Back on the map: the normal 길찾기 → 회사 → 안내 시작 path.
+        val map = items(navView("길찾기", "검색"))
+        s.observe(map)
+        assertEquals(AgentAction.Click(1), s.nextAction(map, 0)?.action)
+    }
+
+    @Test fun theRouteThisCommandStartedIsNeverEnded() {
+        fun items(v: ScreenView) = v.copy(elements = v.elements.map { e -> e.copy(kind = Kind.ITEM) })
+        val s = session()
+        s.recordAction(items(navView("회사")), AgentAction.Click(1), true, 0)
+        s.observe(navView("자동차 32분", "안내 시작"))
+        val driving = items(navView("고매로20번길", "경로 다시 계산 (v reroute)", "메뉴·옵션 열기 (v drawer)"))
+        assertTrue(s.observe(driving).complete)
+        assertNull(s.nextAction(driving, 0))
+    }
+
     @Test fun etaAndStartButtonArePreviewNotCompletion() {
         val s = session()
         assertFalse(s.observe(navView("회사", "안내 시작", "도착 예정 12:30", "남은 거리 10km")).complete)

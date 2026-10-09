@@ -8,12 +8,20 @@ data class NavigationEvidence(val complete: Boolean, val state: String, val reas
 
 /** Per-command proof: destination selection → route preview → actual guidance, never ETA alone. */
 class NavigationSession(val goal: String, private val names: List<String>) {
+    /** What the assistant says once guidance is verified: "회사로 안내를 시작했어요." */
+    val spokenStart: String get() = names.firstOrNull()?.takeIf { it.isNotBlank() }?.let { name ->
+        val c = name.last()
+        val batchim = c in '가'..'힣' && (c - '가') % 28 != 0 && (c - '가') % 28 != 8
+        "$name${if (batchim) "으로" else "로"} 안내를 시작했어요."
+    } ?: "길안내를 시작했어요."
+
     private var initialSignature: Int? = null
     private var dispatched = false
     private var targetPicked = false
     private var destinationBound = false
     private var previewSeen = false
     private var startAttempts = 0
+    private var endSteps = 0
     private var lastStartAt = Long.MIN_VALUE / 2
     private var plainStartAt: Long? = null
     private val resolvedScreens = mutableSetOf<Int>()
@@ -56,7 +64,8 @@ class NavigationSession(val goal: String, private val names: List<String>) {
             return result("PREVIEW", if (destinationBound) "목적지 확인됨; 안내 시작 전" else "경로는 보이지만 목적지 확인이 필요함")
         }
         val active = labels.any {
-            Regex("(?:길|경로)?안내\\s*종료|경로\\s*안내\\s*중|주행\\s*중|경로\\s*안내를\\s*시작합니다").containsMatchIn(it)
+            // NAVER's driving screen itself shows no "안내 중" text, only its reroute / drawer controls.
+            Regex("(?:길|경로)?안내\\s*종료|경로\\s*안내\\s*중|주행\\s*중|경로\\s*안내를\\s*시작합니다|경로\\s*다시\\s*계산|reroute").containsMatchIn(it)
         }
         if (!active) return result("UNCONFIRMED", "실제 안내 화면 증거 없음 (도착 예정·남은 거리만으로 완료하지 않음)")
         if (targetVisible && (!dispatched || changedAfterDispatch)) destinationBound = true
@@ -70,6 +79,20 @@ class NavigationSession(val goal: String, private val names: List<String>) {
     fun nextAction(view: ScreenView, now: Long): Harness.Auto? {
         if (view.snapshot.packageName != NAVER_MAP) return null
         if (!preview(view)) {
+            // Guidance from before this command (its destination is not shown as "회사"): end it from the
+            // drawer and start the requested route the normal way. Never for the route this run started.
+            if (evidence.state in setOf("ACTIVE_UNBOUND", "WRONG_DESTINATION", "STALE_GUIDANCE") && !targetPicked && !previewSeen && endSteps < 4) {
+                view.elements.firstOrNull { it.enabled && it.kind != Kind.TEXT && Regex("^(?:길|경로)?안내\\s*종료$").matches(it.label.trim()) }?.let {
+                    endSteps++; return Harness.Auto(AgentAction.Click(it.id), "이번 목적지로 확인되지 않는 이전 안내를 끝내고 새로 시작")
+                }
+                view.elements.firstOrNull { it.enabled && it.kind != Kind.TEXT && Regex("메뉴.*옵션|drawer", RegexOption.IGNORE_CASE).containsMatchIn(it.label) }?.let {
+                    endSteps++; return Harness.Auto(AgentAction.Click(it.id), "안내 종료 메뉴 열기")
+                }
+            }
+            // "안내를 종료할까요?" after our own 안내 종료.
+            if (evidence.state == "PROMPT" && endSteps > 0 && endSteps < 5) view.elements.firstOrNull {
+                it.enabled && it.kind != Kind.TEXT && Regex("^(?:종료|확인|안내\\s*종료)$").matches(it.label.trim())
+            }?.let { endSteps++; return Harness.Auto(AgentAction.Click(it.id), "안내 종료 확인") }
             if (evidence.state in setOf("PROMPT", "ACTIVE_UNBOUND", "WRONG_DESTINATION", "GUIDANCE_VERIFIED", "STALE_GUIDANCE")) return null
             if (view.signature in resolvedScreens) return null
             val hits = view.elements.filter { e -> e.enabled && e.kind in setOf(Kind.ITEM, Kind.BUTTON) && matches(e.label) &&

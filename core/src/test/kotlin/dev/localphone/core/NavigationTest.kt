@@ -89,6 +89,30 @@ class NavigationTest {
         assertEquals("길찾기", map.element(action.id)?.label)
     }
 
+    @Test fun aMisheardPlaceIsLeftToTheModelWithEveryPlaceTheListShowed() {
+        val s = NavigationSession.forGoal("수유 모임으로 안내해 줘", alternatives = listOf("수요 모임으로 안내해 줘", "수유모임으로 안내해 줘"))!!
+        assertEquals(listOf("수요 모임"), s.heard)
+        val first = frequents("집", "회사", "수요모…", "일요모…")
+        val second = frequents("수요모…", "일요모…", "수원집")
+        s.observe(first); assertTrue(s.nextAction(first, 0)?.action is AgentAction.Scroll)
+        s.observe(second); assertTrue(s.nextAction(second, 0)?.action is AgentAction.Scroll)
+        // End on the right: walk back to the start as well, so nothing on earlier pages is missed.
+        s.observe(second); assertEquals(ScrollDir.LEFT, (s.nextAction(second, 0)?.action as AgentAction.Scroll).dir)
+        s.observe(first); assertTrue(s.nextAction(first, 0)?.action is AgentAction.Scroll)
+        s.observe(first); assertNull(s.nextAction(first, 0)) // both ends seen, nothing named "수유 모임"
+        assertEquals(listOf("집", "회사", "수요모…", "일요모…", "수원집"), s.choiceNeeded())
+        // The model judged 3 = 수요모…; the harness walks to it and presses it.
+        s.choose("수요모…")
+        assertNull(s.choiceNeeded())
+        val click = s.nextAction(first, 0)?.action as AgentAction.Click
+        assertEquals("수요모…", first.element(click.id)?.label)
+        val (prompt, grammar) = Prompts.placeChoice("수유 모임으로 안내해 줘", s.heard, listOf("집", "회사", "수요모…"))
+        assertTrue("수요 모임" in prompt.user && "수요모(…로 잘림)" in prompt.user, prompt.user)
+        assertTrue(grammar.contains("\"수요모\"") && grammar.contains("\"없음\""), grammar)
+        assertEquals("수요모…", Prompts.placePicked("{\"place\":\"수요모\"}", listOf("집", "회사", "수요모…")))
+        assertEquals(null, Prompts.placePicked("{\"place\":\"없음\"}", listOf("집", "회사", "수요모…")))
+    }
+
     @Test fun aCutNameInTheCarouselStillMatches() {
         val s = NavigationSession.forGoal("수요모임으로 안내해줘")!!
         val v = frequents("집", "회사", "수요모…", "일요모…")
@@ -100,7 +124,9 @@ class NavigationTest {
         val s = NavigationSession.forGoal("부산 별장으로 안내해줘")!!
         val v = frequents("집", "회사")
         s.observe(v); assertTrue(s.nextAction(v, 0)?.action is AgentAction.Scroll)
-        s.observe(v); assertNull(s.nextAction(v, 0)) // same screen after the scroll: end of the list
+        s.observe(v); assertEquals(ScrollDir.LEFT, (s.nextAction(v, 0)?.action as AgentAction.Scroll).dir) // right end: back to the start
+        s.observe(v); assertNull(s.nextAction(v, 0)) // both ends: the list is done
+        assertEquals(listOf("집", "회사"), s.choiceNeeded())
     }
 
     @Test fun endGuidanceOpensTheDrawerPressesEndAndConfirmsTheDrivingScreenIsGone() {

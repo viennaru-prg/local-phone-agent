@@ -121,6 +121,38 @@ root ::= "{\"verdict\":" ("\"continue\"" | "\"ask\"" | "\"fail\"") ",\"reason\":
 char ::= [^"\\\x00-\x1F] | "\\" ["\\/bfnrt]
 """.trim()
 
+    /** A judgment the harness cannot make: which saved place the user meant. Answer is one number. */
+    const val PLACE_SYSTEM = "사용자가 말한 목적지가 지도 앱에 저장된 장소 중 어느 것인지 판단한다.\n" +
+        "음성 인식은 발음이 비슷한 다른 글자로 틀릴 수 있으니 들은 말과 다른 후보를 모두 본다.\n" +
+        "'…로 잘림' 표시가 있는 이름은 앞부분만 보이는 것이다. 들은 말이 그 앞부분으로 시작하거나 거의 같으면 그 장소다.\n" +
+        "글자가 하나 같다는 것만으로 고르지 않는다. 같은 장소라고 볼 근거가 없으면 없음.\n" +
+        "장소 이름을 그대로 쓴다."
+
+    /**
+     * The model writes the place's name, constrained to the listed names: a small model copies the name
+     * that sounds like what it heard far better than it picks an index (it echoed an example's number).
+     */
+    fun placeChoice(goal: String, heard: List<String>, places: List<String>): Pair<ModelPrompt, String> {
+        val spoken = ShortcutGoals.navigationTarget(goal) ?: goal
+        val shown = places.map { it.removeSuffix("…").trim() }
+        val user = buildString {
+            append("들은 말: ").append(spoken).append('\n')
+            if (heard.isNotEmpty()) append("다른 후보: ").append(heard.joinToString(", ")).append('\n')
+            append("저장된 장소: ")
+            append(places.joinToString(", ") { p -> if (p.endsWith("…")) "${p.removeSuffix("…")}(…로 잘림)" else p })
+            append("\n고른 장소 JSON:")
+        }
+        fun lit(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        val options = (shown.distinct() + "없음").joinToString(" | ") { lit(it) }
+        return ModelPrompt(PLACE_SYSTEM, user) to """root ::= "{\"place\":\"" ($options) "\"}""""
+    }
+
+    /** The listed place the model named (null = none of them). */
+    fun placePicked(raw: String, places: List<String>): String? {
+        val name = Regex("\"place\"\\s*:\\s*\"(.*?)\"").find(raw)?.groupValues?.get(1)?.trim() ?: return null
+        return places.firstOrNull { it.removeSuffix("…").trim() == name }
+    }
+
     private fun context(goal: String, notes: List<String>, history: List<HistoryLine>, view: ScreenView, facts: List<String>,showHistory:Boolean=true): String =
         buildString {
             append("목표: ").append(goal).append('\n')

@@ -314,6 +314,19 @@ class Agent(
                 if (run.noChange >= config.maxNoChange) return fail(run, "화면이 더 이상 바뀌지 않아 중단했습니다.")
                 continue
             }
+            // The harness has seen every saved place and none is named as heard: the model judges which one
+            // the user meant (a misheard "수유 모임" for 수요모임). One number out; the harness walks to it.
+            navigation?.choiceNeeded()?.let { places ->
+                val (prompt, grammar) = Prompts.placeChoice(goal, navigation.heard, places)
+                val t0 = phone.now()
+                val raw = runCatching { model.decide(prompt, grammar) }.getOrDefault("")
+                val place = Prompts.placePicked(raw, places)
+                navigation.choose(place)
+                run.history += HistoryLine("목적지 판단", place?.let { "저장 장소 '$it'" } ?: "해당하는 저장 장소 없음")
+                listener.step(StepRecord(index, "model", view.render(), raw, "choose_place", place ?: "없음",
+                    "들은 이름과 같은 저장 장소가 없어 목록 중 의미를 판단", phone.now() - t0, phone.now() - started))
+                continue
+            }
             // A just-opened app is often still drawing (NAVER Map's splash): a 26 s model call on it was
             // discarded when the real screen appeared. Before the first model call, give the screen up to
             // 2.5 s to show something the harness can act on.

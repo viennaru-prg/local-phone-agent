@@ -104,7 +104,13 @@ class AgentService : Service() {
                 }
             }
             val phone = AndroidPhone(this@AgentService)
-            val navigation = NavigationSession.forGoal(goal, app.places.mentionedIn(goal))
+            // The recognizer's other hypotheses ("수요 모임으로 안내해 줘" behind "수유 모임…") let the model
+            // judge a misheard destination against the places the map actually lists.
+            val alternatives = runCatching {
+                val json = org.json.JSONObject(intent.getStringExtra(EXTRA_SPEECH) ?: "{}").optJSONArray("hypotheses")
+                (0 until (json?.length() ?: 0)).map { json!!.getJSONObject(it).getString("text") }.drop(1)
+            }.getOrDefault(emptyList())
+            val navigation = NavigationSession.forGoal(goal, app.places.mentionedIn(goal), alternatives)
             val agent = Agent(app.llm, phone,
                 if (app.prefs.useRecipes) app.recipes else RecipeBook({ null }, {}),
                 { app.prefs.noteLines },

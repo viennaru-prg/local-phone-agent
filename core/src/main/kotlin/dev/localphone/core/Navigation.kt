@@ -11,9 +11,15 @@ data class NavigationEvidence(val complete: Boolean, val state: String, val reas
  * [app] says what differs in the navigation app (its package, the control that lists home/work/frequent
  * places, the controls shown only while guiding); the steps themselves are generic.
  */
-class NavigationSession(val goal: String, private val names: List<String>, private val app: AppProfile = Harness.navigationApp()) {
+class NavigationSession(val goal: String, private val names: List<String>, private val app: AppProfile = Harness.navigationApp(),
+                        /** Other things the recognizer heard for the destination ("수요 모임" behind "수유 모임"). */
+                        val heard: List<String> = emptyList()) {
     /** What the assistant says once guidance is verified: "회사로 안내를 시작했어요." */
-    val spokenStart: String get() = names.firstOrNull()?.takeIf { it.isNotBlank() }?.let { name ->
+    val spokenStart: String get() = (chosenFull ?: chosen?.let { c ->
+        // A cut carousel name ("수요모…"): say it as the recognizer heard it ("수요 모임").
+        if (!c.endsWith("…")) c else (heard + names).firstOrNull { GoalText.normalize(it).startsWith(GoalText.normalize(c.removeSuffix("…"))) }
+            ?: c.removeSuffix("…")
+    } ?: names.firstOrNull())?.takeIf { it.isNotBlank() }?.let { name ->
         val c = name.last()
         val batchim = c in '가'..'힣' && (c - '가') % 28 != 0 && (c - '가') % 28 != 8
         "$name${if (batchim) "으로" else "로"} 안내를 시작했어요."
@@ -34,11 +40,40 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
     private val resolvedScreens = mutableSetOf<Int>()
     /** The route entry (길찾기) was opened: sideways lists from here on hold places. */
     private var targetSearchOpened = false
+    /** Every place the carousel showed while paging (집, 회사, 수요모…, 일요모…, 수원집). */
+    private val seenPlaces = linkedSetOf<String>()
+    private var choiceAsked = false
+    /** The saved place the model judged the user meant, when no name matched as heard. */
+    private var chosen: String? = null
+    private var chosenFull: String? = null
     var evidence = NavigationEvidence(false, "UNRESOLVED", "목적지를 아직 확인하지 못함"); private set
 
     fun beforeDispatch(view: ScreenView?) { initialSignature = view?.signature; dispatched = true }
 
-    private fun matches(label: String): Boolean = names.any { name ->
+    /**
+     * No saved place matches the name as heard, the whole list was seen: the places for the model to
+     * judge against (speech can mishear "수요모임" as "수유 모임"). Null when there is nothing to ask.
+     */
+    fun choiceNeeded(): List<String>? = seenPlaces.toList().takeIf { carouselEnd && !choiceAsked && chosen == null && it.isNotEmpty() }
+
+    /** The model's pick (null = none of them): page back through the list to it. */
+    fun choose(place: String?) {
+        choiceAsked = true
+        if (place == null) return
+        chosen = place
+        // Collection ended at the list's start (paging back): look for the pick going forward again.
+        carouselEnd = false; carouselScrolls = 0; carouselSignature = null; pageBack = !collectedBack
+    }
+    private var pageBack = false
+    private var collectedBack = false
+
+    /** Forget the progress of a route that was ended to start over (the map screens repeat). */
+    private fun restart() {
+        resolvedScreens.clear(); targetSearchOpened = false
+        carouselEnd = false; carouselScrolls = 0; carouselSignature = null; pageBack = false; collectedBack = false
+    }
+
+    private fun matches(label: String): Boolean = (names + listOfNotNull(chosen)).any { name ->
         val wanted = GoalText.normalize(name)
         Regex("(?:^|[\\s:：])${Regex.escape(name)}(?:$|[\\s,()])", RegexOption.IGNORE_CASE).containsMatchIn(label) ||
             GoalText.normalize(label) == wanted ||
@@ -73,6 +108,12 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
         }
         val targetVisible = labels.any(::matches) || destination.any(::matches)
         val changedAfterDispatch = initialSignature == null || initialSignature != view.signature
+        // A cut carousel name the model chose ("수요모…"): the route preview shows it in full.
+        chosen?.takeIf { it.endsWith("…") && chosenFull == null }?.let { cut ->
+            val prefix = GoalText.normalize(cut.removeSuffix("…"))
+            chosenFull = labels.mapNotNull { it.trim().split(Regex("\\s+")).firstOrNull() }
+                .firstOrNull { !it.endsWith("…") && GoalText.normalize(it).startsWith(prefix) && GoalText.normalize(it).length > prefix.length }
+        }
         if (preview(view)) {
             // An already open unrelated route must not become proof just because a deep link launched.
             if (targetPicked || (targetVisible && (!dispatched || changedAfterDispatch))) destinationBound = true
@@ -97,7 +138,7 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
             // drawer and start the requested route the normal way. Never for the route this run started.
             if (evidence.state in setOf("ACTIVE_UNBOUND", "WRONG_DESTINATION", "STALE_GUIDANCE") && !targetPicked && !previewSeen && endSteps < 4) {
                 Skills.pressBehindMenu(app.endGuidanceRegex(), view, emptyList(), "이번 목적지로 확인되지 않는 이전 안내를 끝내고 새로 시작")
-                    ?.let { endSteps++; return it }
+                    ?.let { endSteps++; restart(); return it }
             }
             // "안내를 종료할까요?" after our own 안내 종료.
             if (evidence.state == "PROMPT" && endSteps > 0 && endSteps < 5) view.elements.firstOrNull {
@@ -109,7 +150,8 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
                 !Regex("등록|수정|삭제|변경|설정").containsMatchIn(e.label) }
             val target = hits.filter { e -> names.any { GoalText.normalize(e.label) == GoalText.normalize(it) } }.singleOrNull()
                 ?: hits.singleOrNull()
-            if (target != null) return Harness.Auto(AgentAction.Click(target.id), "현재 지도에서 요청한 목적지 항목이 하나로 확인됨")
+            if (target != null) return Harness.Auto(AgentAction.Click(target.id),
+                if (chosen != null) "모델이 고른 저장 장소 '${target.label}'" else "현재 지도에서 요청한 목적지 항목이 하나로 확인됨")
             // Home/work and frequent destinations are listed behind the app's route entry (NAVER: 길찾기):
             // open it first. The map's own sideways lists (category chips) are not places.
             if (hits.isEmpty() && !targetPicked) app.routeEntry?.let { entry -> view.elements.singleOrNull {
@@ -117,10 +159,21 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
             } }?.let { return Harness.Auto(AgentAction.Click(it.id), "${it.label}의 집·회사·자주 가는 곳을 먼저 확인") }
             // A sideways list of places (NAVER: 집, 회사, 수요모…, 일요모…) shows a few at a time: page through it.
             if (hits.isEmpty() && !targetPicked) placeCarousel(view)?.let { carousel ->
+                // Remember what the list offers, for the model to judge if nothing matches as heard.
+                view.elements.filter { e -> e.enabled && e.kind != Kind.TEXT && e.kind != Kind.LIST &&
+                    e.bounds.centerY in carousel.bounds.top..carousel.bounds.bottom && e.bounds.centerX in carousel.bounds.left..carousel.bounds.right &&
+                    !Regex("^(?:더보기|전체\\s*보기|등록|편집|추가|more|edit|add)$", RegexOption.IGNORE_CASE).matches(e.label.trim())
+                }.forEach { seenPlaces += it.label.trim() }
                 if (carouselSignature == view.signature) carouselEnd = true // the last scroll moved nothing
-                if (!carouselEnd && carouselScrolls < 5) {
+                // The list may have been left scrolled to its end: before asking, walk back to its start too,
+                // so the model sees every place (집 and 회사 were missing once).
+                if (carouselEnd && chosen == null && !choiceAsked && !collectedBack) {
+                    collectedBack = true; pageBack = true; carouselEnd = false; carouselScrolls = 0; carouselSignature = null
+                }
+                if (!carouselEnd && carouselScrolls < 8) {
                     carouselScrolls++; carouselSignature = view.signature
-                    return Harness.Auto(AgentAction.Scroll(ScrollDir.RIGHT, carousel.id), "자주 가는 곳 목록을 넘겨 '${names.first()}' 찾기")
+                    val dir = if (pageBack) ScrollDir.LEFT else ScrollDir.RIGHT
+                    return Harness.Auto(AgentAction.Scroll(dir, carousel.id), "자주 가는 곳 목록을 넘겨 '${chosen ?: names.first()}' 찾기")
                 }
             }
             return null
@@ -172,7 +225,8 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
     companion object {
         private val drivingText = Regex("경로\\s*안내\\s*중|주행\\s*중|경로\\s*안내를\\s*시작합니다")
         const val NAVER_MAP = "com.nhn.android.nmap"
-        fun forGoal(goal: String, place: Place? = null): NavigationSession? {
+        /** [alternatives]: the recognizer's other hypotheses for the whole command ("수요 모임으로 안내해 줘"). */
+        fun forGoal(goal: String, place: Place? = null, alternatives: List<String> = emptyList()): NavigationSession? {
             if (!Router.isNavigationGoal(goal) || !Router.usesNaver(goal)) return null
             val target = ShortcutGoals.navigationTarget(goal) ?: return null
             val aliases = when (GoalText.normalize(target.orEmpty())) {
@@ -181,7 +235,9 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
                 "본가", "부모님집" -> listOf("본가", "부모님집")
                 else -> listOfNotNull(target)
             }
-            return NavigationSession(goal, place?.takeIf { p -> p.names.any { GoalText.normalize(it) == GoalText.normalize(target) } }?.names ?: aliases)
+            val heard = alternatives.mapNotNull { ShortcutGoals.navigationTarget(it) }.filter { GoalText.normalize(it) != GoalText.normalize(target) }.distinct()
+            return NavigationSession(goal, place?.takeIf { p -> p.names.any { GoalText.normalize(it) == GoalText.normalize(target) } }?.names ?: aliases,
+                heard = heard)
         }
     }
 }

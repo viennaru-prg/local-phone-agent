@@ -54,7 +54,16 @@ class VoiceActivity : Activity() {
             finish(); return
         }
         android.util.Log.i("AgentVoice", "typed goal=${typed ?: "(none, listening)"}")
-        if (!typed.isNullOrBlank()) { origin = "ADB_TEXT"; submit(typed); return }
+        // Debug builds: `--es alts_b64 <base64 of "후보1|후보2">` stands in for the recognizer's other hypotheses.
+        val alternatives = if (!BuildConfig.ADB_GOALS) null else intent.getStringExtra("alts_b64")
+            ?.let { String(android.util.Base64.decode(it, android.util.Base64.DEFAULT), Charsets.UTF_8) }
+            ?.split('|')?.filter { it.isNotBlank() }
+        val details = typed?.let { first -> alternatives?.let { alts ->
+            org.json.JSONObject().put("hypotheses", org.json.JSONArray().apply {
+                (listOf(first) + alts).forEach { put(org.json.JSONObject().put("text", it)) }
+            }).toString()
+        } }
+        if (!typed.isNullOrBlank()) { origin = "ADB_TEXT"; submit(typed, details); return }
         val accessibilityEnabled = getSystemService(android.view.accessibility.AccessibilityManager::class.java)
             .getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
             .any { it.resolveInfo.serviceInfo.packageName == packageName &&

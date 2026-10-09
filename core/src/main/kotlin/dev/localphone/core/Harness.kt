@@ -50,6 +50,7 @@ object Harness {
         commitAfterTarget(goal, view, history)?.let { return it }
         search(goal, view, history)?.let { return it }
         openNamedItem(goal, view, history)?.let { return it }
+        searchScreen(goal, view, history)?.let { return it }
         reverseScroll(history)?.let { return it }
         return null
     }
@@ -75,7 +76,7 @@ object Harness {
         return Auto(AgentAction.Wait, EMPTY)
     }
 
-    private val generic = setOf("화면", "메뉴", "탭", "페이지", "설정", "보여", "열어", "앱")
+    private val generic = setOf("화면", "메뉴", "탭", "페이지", "설정", "보여", "열어", "들어", "들어가", "앱")
 
     /**
      * "설정에서 블루투스 화면 열어줘": when exactly one item on screen is named by the target word
@@ -86,12 +87,19 @@ object Harness {
         val names = GoalText.targetWords(goal).filter { it !in generic && it.length >= 2 }
         if (names.isEmpty()) return null
         val candidates = view.elements.filter { e -> (e.kind == Kind.ITEM || e.kind == Kind.BUTTON) && e.enabled && !e.selected }
-        val hits = candidates.filter { e -> names.any { n -> GoalText.variants(n).any { GoalText.normalize(e.label).startsWith(it) } } }
+        // Every word of the name, not one of them: "보안 및 개인정보 보호" is not "소프트웨어 정보".
+        fun named(e: Element) = names.all { GoalText.matches(e.label, listOf(it)) }
+        val hits = candidates.filter { e -> named(e) && GoalText.variants(names.first()).any { GoalText.normalize(e.label).startsWith(it) } }
         // No item starts with the name: a single category that mentions it ("연결 Wi-Fi • 블루투스 • SIM 관리").
-        val item = hits.singleOrNull()
-            ?: candidates.filter { e -> GoalText.matches(e.label, names) }.singleOrNull()?.takeIf { hits.isEmpty() }
+        // Search results list "디스플레이" next to "디스플레이 · 최근 사용한 설정": the exact name wins.
+        val exact = ShortcutGoals.screenName(goal)?.let(GoalText::normalize)
+        val item = hits.singleOrNull { GoalText.normalize(it.label) == exact } ?: hits.singleOrNull()
+            ?: candidates.filter(::named).singleOrNull()?.takeIf { hits.isEmpty() }
             ?: return null
-        if (history.takeLast(2).any { it.action == "click \"${item.label}\"" }) return null
+        // Once more only if that press led to another screen that lists the item again (a settings search
+        // result opens the parent page "폰 정보" with "소프트웨어 정보" highlighted in it).
+        val same = history.takeLast(3).filter { it.action == "click \"${item.label}\"" }
+        if (same.size >= 2 || same.any { "바뀜" !in it.outcome }) return null
         return Auto(AgentAction.Click(item.id), "목표 이름 '${item.label}' 항목을 연다")
     }
 
@@ -103,7 +111,9 @@ object Harness {
         if (ShortcutGoals.screenName(goal) == null) return true
         val names = GoalText.targetWords(goal).filter { it !in generic && it.length >= 2 }
         if (names.isEmpty()) return true
-        return GoalText.matches(view.snapshot.appLabel, names) || view.elements.any { e -> GoalText.matches(e.label, names) }
+        // Every word in one label: "소프트웨어 정보" is not shown by "보안 및 개인정보 보호" (only "정보").
+        fun named(label: String) = names.all { GoalText.matches(label, listOf(it)) }
+        return named(view.snapshot.appLabel) || view.elements.any { e -> named(e.label) }
     }
 
     /** Selected tab or actual title, not a matching row in the previous menu. Any app can supply it. */
@@ -114,6 +124,20 @@ object Harness {
         return view.elements.any { e ->
             (e.selected || (e.kind == Kind.TEXT && e.bounds.bottom <= view.snapshot.height * 0.30)) &&
                 names.all { GoalText.matches(e.label, listOf(it)) }
+        }
+    }
+
+    /**
+     * The requested screen is still a row to press on this one ("폰 정보" listing "소프트웨어 정보"): not
+     * open yet, whatever a verifier reads into the highlighted row.
+     */
+    fun screenStillListed(goal: String, view: ScreenView): Boolean {
+        if (ShortcutGoals.screenName(goal) == null || openScreenEvidence(goal, view)) return false
+        val names = GoalText.targetWords(goal).filter { it !in generic && it.length >= 2 }
+        if (names.isEmpty()) return false
+        return view.elements.any { e ->
+            (e.kind == Kind.ITEM || e.kind == Kind.BUTTON) && e.enabled && names.all { GoalText.matches(e.label, listOf(it)) } &&
+                GoalText.variants(names.first()).any { GoalText.normalize(e.label).startsWith(it) }
         }
     }
 
@@ -383,6 +407,11 @@ object Harness {
     private fun search(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
         val query = ShortcutGoals.searchPrefix(goal) ?: return null
         if (view.snapshot.home || history.none { it.action.startsWith("open_app") || it.action.startsWith("click") }) return null
+        return searchFor(query, view, history)
+    }
+
+    /** Type [query] into the app's search field, opening the field first if only a search button shows. */
+    private fun searchFor(query: String, view: ScreenView, history: List<HistoryLine>): Auto? {
         val q = GoalText.normalize(query)
         if (history.any { it.action.startsWith("type ") && GoalText.normalize(it.action).contains(q) }) return null // typed already
         val inputs = view.inputs.filter { it.enabled }
@@ -399,6 +428,21 @@ object Harness {
                 recent.none { it == "click \"${e.label}\"" }
         } ?: return null
         return Auto(AgentAction.Click(button.id), "검색창을 열기 위해 '${button.label}'")
+    }
+
+    /**
+     * "설정에서 소프트웨어 정보 보여줘": a screen that is not on the app's first page is found by the app's
+     * own search, not by browsing menus (the model opened "보안 및 개인정보 보호" for the word "정보").
+     * Only from the first page, before anything else was tried; the result row is opened by
+     * [openNamedItem].
+     */
+    private fun searchScreen(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
+        val name = ShortcutGoals.screenName(goal) ?: return null
+        if (GoalText.namedApp(goal) == null || view.snapshot.home || history.none { it.action.startsWith("open_app") }) return null
+        val since = history.indexOfLast { it.action.startsWith("open_app") }
+        val searching = Regex("^(?:type |click \"[^\"]*(?:검색|search))", RegexOption.IGNORE_CASE)
+        if (history.drop(since + 1).any { Skills.realAction.containsMatchIn(it.action) && it.action != "wait" && !searching.containsMatchIn(it.action) }) return null
+        return searchFor(name, view, history)
     }
 
     /**

@@ -8,7 +8,7 @@ import dev.localphone.core.Harness.Auto
  * way worked (see [Skills.learnFrom]).
  */
 object Skills {
-    private val realAction = Regex("^(?:click|double_tap|click_end|long_click|type|scroll|open_app|back|media|wait)\\b")
+    val realAction = Regex("^(?:click|double_tap|click_end|long_click|type|scroll|open_app|back|media|wait)\\b")
 
     /** The last thing actually done on the screen (bookkeeping lines like "전체 목표 검증" are skipped). */
     fun lastAction(history: List<HistoryLine>): HistoryLine? = history.lastOrNull { it.action != "wait" && realAction.containsMatchIn(it.action) }

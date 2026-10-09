@@ -168,6 +168,14 @@ class Assistant(
         if (Regex("안내|길\\s*찾|내비|네비|데려다").containsMatchIn(goal) && !Regex("종료|그만|꺼|끝").containsMatchIn(goal) && GoalText.missingDestination(goal))
             return AgentResult(Outcome.ASK, "어디로 안내할까요?", listOf(HistoryLine("목적지 질문", goal)))
         QuickCommands.parse(goal)?.let { request ->
+            listener.progress(when (request) {
+                QuickRequest.Time -> "시간 확인 중…"
+                QuickRequest.Date -> "날짜 확인 중…"
+                QuickRequest.Battery -> "배터리 확인 중…"
+                is QuickRequest.Volume -> "볼륨 조절 중…"
+                is QuickRequest.Timer -> "타이머 설정 중…"
+                is QuickRequest.Alarm -> "알람 설정 중…"
+            })
             tools.quick(request)?.let { say ->
                 listener.step(StepRecord(0, "android_api", "", "", request.toString(), "완료", "Android 기능으로 바로 처리", 0, 0))
                 return AgentResult(Outcome.DONE, say, emptyList())
@@ -195,11 +203,17 @@ class Assistant(
         }
         listener.step(StepRecord(0, "router", "", raw, route.toString(), "", reason, routeMs, routeMs))
         return when (route) {
-            is Route.Navigate -> tools.navigate(route.place)?.let { AgentResult(Outcome.DONE, it, emptyList()) }
-                ?: agent.run(goal) // deep link failed: fall back to operating the map on screen
+            is Route.Navigate -> {
+                listener.progress("${route.place.name} 길안내 준비 중…")
+                tools.navigate(route.place)?.let { AgentResult(Outcome.DONE, it, emptyList()) }
+                    ?: agent.run(goal) // deep link failed: fall back to operating the map on screen
+            }
             // The key was sent but not confirmed: the screen agent finishes it, knowing a key already went out.
-            is Route.Media -> tools.media(route.key)?.let { AgentResult(Outcome.DONE, it, emptyList()) }
-                ?: agent.run(goal, listOf(HistoryLine("media ${route.key.name.lowercase()}", "키 전송, 확인 전")))
+            is Route.Media -> {
+                listener.progress("음악 조작 중…")
+                tools.media(route.key)?.let { AgentResult(Outcome.DONE, it, emptyList()) }
+                    ?: agent.run(goal, listOf(HistoryLine("media ${route.key.name.lowercase()}", "키 전송, 확인 전")))
+            }
             Route.Screen -> {
                 if ((Router.isNavigationGoal(goal) && Router.usesNaver(goal)) || QuickCommands.etaTarget(goal) != null) {
                     val opened = tools.prepareNavigation()

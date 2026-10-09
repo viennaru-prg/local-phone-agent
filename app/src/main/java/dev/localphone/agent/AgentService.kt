@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import android.util.Log
@@ -30,10 +31,46 @@ class AgentService : Service() {
     /** Bumped by every new command, so a previous command's wrap-up never stops the service under it. */
     private var runId = 0
     private lateinit var speaker: Speaker
+    private lateinit var usageMonitor: UsageMonitor
+    private var displayedGoal: String? = null
+    private var displayedTask = ""
+    private var importantStatus = false
+    private var displayRunning = false
+    private val displayListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key?.startsWith("display_") == true) scope.launch {
+            AgentAccessibilityService.instance?.refreshDisplay()
+            if (displayRunning && (key == "display_total" || key == "display_ai")) startUsageMonitor(runId)
+        }
+    }
 
-    override fun onCreate() { super.onCreate(); speaker = Speaker(this) }
+    override fun onCreate() {
+        super.onCreate(); speaker = Speaker(this); usageMonitor = UsageMonitor(this, scope)
+        app.prefs.registerDisplayListener(displayListener)
+    }
     override fun onBind(intent: Intent?): IBinder? = null
-    override fun onDestroy() { scope.cancel(); speaker.shutdown(); AgentAccessibilityService.instance?.hideOverlay(); super.onDestroy() }
+    override fun onDestroy() {
+        displayRunning = false; usageMonitor.stop(); app.prefs.unregisterDisplayListener(displayListener)
+        scope.cancel(); speaker.shutdown(); AgentAccessibilityService.instance?.hideOverlay(); super.onDestroy()
+    }
+
+    private fun showTask(text: String, important: Boolean = false) {
+        displayedTask = text; importantStatus = important
+        AgentAccessibilityService.instance?.let { a11y ->
+            displayedGoal?.let(a11y::beginRun)
+            a11y.showStatus(text, important)
+        }
+    }
+
+    private fun startUsageMonitor(id: Int) {
+        usageMonitor.start(app.prefs.displayOptions) { value ->
+            if (id == runId && displayRunning) {
+                AgentAccessibilityService.instance?.let { a11y ->
+                    displayedGoal?.let(a11y::beginRun)
+                    a11y.showStatus(displayedTask, importantStatus); a11y.showUsage(value)
+                }
+            }
+        }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(1, notification("명령 처리 중"), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -74,6 +111,8 @@ class AgentService : Service() {
         if (goal.isBlank()) { stopSelf(); return }
         job?.cancel()
         val id = ++runId
+        usageMonitor.stop(); displayRunning = false
+        displayedGoal = goal; displayedTask = "작업 준비 중…"
         job = scope.launch {
             val trace = Trace(app.traces, goal, mapOf(
                 "origin" to intent.getStringExtra(EXTRA_ORIGIN), "speech" to intent.getStringExtra(EXTRA_SPEECH),
@@ -93,17 +132,21 @@ class AgentService : Service() {
                 finish(message, speak = true, id = id); return@launch
             }
             a11y.onCancel = { if (id == runId) { job?.cancel(); finish("작업을 멈췄습니다.", speak = false, id = id) } }
-            a11y.showStatus("“$goal”")
+            showTask("작업 준비 중…")
+            displayRunning = true; startUsageMonitor(id)
             // Act only once the voice sheet is gone: under it the target app's window is not reachable.
             a11y.awaitOwnWindowGone()
             val listener = object : AgentListener {
-                override fun progress(text: String) { if (id == runId) AgentAccessibilityService.instance?.showStatus(text) }
-                override fun needUser(text: String) { AgentAccessibilityService.instance?.showStatus(text); scope.launch { speaker.say(text) } }
+                override fun progress(text: String) { if (id == runId) showTask(text) }
+                override fun needUser(text: String) {
+                    if (id == runId) { showTask(text, important = true); scope.launch { speaker.say(text) } }
+                }
                 override fun step(record: StepRecord) {
                     trace.step(record, if (record.modelMs > 0) app.llm.lastStats else null)
+                    if (id != runId) return
                     AgentAccessibilityService.instance?.let { current ->
                         current.onCancel = { if (id == runId) { job?.cancel(); finish("작업을 멈췄습니다.", speak = false, id = id) } }
-                        current.showStatus("${record.index}. ${record.action} → ${record.outcome}")
+                        StatusText.forStep(record.action)?.let { showTask(it) }
                     }
                 }
             }
@@ -151,7 +194,8 @@ class AgentService : Service() {
             trace.finish(result)
             if (result.outcome == Outcome.FAILED) trace.observation(AgentAccessibilityService.instance?.observationDiagnostic)
             if (id != runId) return@launch
-            a11y.showStatus(if (result.outcome == Outcome.DONE) "완료: ${result.say}" else result.say)
+            displayRunning = false; usageMonitor.stop()
+            showTask(if (result.outcome == Outcome.DONE) "완료: ${result.say}" else result.say)
             when (result.outcome) {
                 Outcome.ASK -> {
                     // A question in one part of several commands: the answer continues that part.
@@ -172,13 +216,18 @@ class AgentService : Service() {
                 Outcome.FAILED -> finish(result.say, speak = true, id = id)
             }
             } catch (e: CancellationException) { trace.cancelled(); throw e }
-            finally { trace.closed() }
+            finally {
+                if (id == runId) { displayRunning = false; usageMonitor.stop() }
+                trace.closed()
+            }
         }
     }
 
     private fun finish(message: String, speak: Boolean, id: Int) {
         if (id != runId) return
-        AgentAccessibilityService.instance?.let { it.showStatus(message); it.onCancel = null }
+        displayRunning = false; usageMonitor.stop()
+        showTask(message)
+        AgentAccessibilityService.instance?.onCancel = null
         scope.launch {
             if (speak && app.prefs.speak) speaker.say(message) else delay(600)
             if (id != runId) return@launch // a new command started meanwhile; it owns the service now

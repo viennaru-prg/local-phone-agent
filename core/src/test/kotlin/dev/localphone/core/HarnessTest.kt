@@ -73,6 +73,21 @@ class HarnessTest {
         assertEquals(AgentAction.Click(2), Harness.preDecide(goal, list, listOf(HistoryLine("open_app \"설정\"", "열림: 설정")))?.action)
         assertEquals(false, Harness.screenShown(goal, view(goal, listOf("텍스트", "배경화면 및 스타일"), listOf("항목", "테마"))))
         assertEquals(true, Harness.screenShown(goal, view(goal, listOf("텍스트", "Wi-Fi"), listOf("스위치", "Wi-Fi", "on"))))
+        // One shared word is not the screen: "보안 및 개인정보 보호" for "소프트웨어 정보".
+        val info = "설정에서 소프트웨어 정보 보여줘"
+        assertEquals("소프트웨어 정보", ShortcutGoals.screenName(info))
+        assertEquals("디스플레이", ShortcutGoals.screenName("설정에서 디스플레이로 들어가줘"))
+        assertNull(ShortcutGoals.screenName("갤러리에서 최근 사진 보여줘"))
+        val display = "설정에서 디스플레이로 들어가줘"
+        assertEquals(true, Harness.openScreenEvidence(display, view(display, listOf("텍스트", "디스플레이"), listOf("항목", "밝기"))))
+        val results = view(display, listOf("입력칸", "무엇을 찾고 있나요?", "value=디스플레이"), listOf("항목", "디스플레이 · 최근 사용한 설정"), listOf("항목", "디스플레이"))
+        assertEquals(AgentAction.Click(3), Harness.preDecide(display, results, listOf(HistoryLine("open_app \"설정\"", "열림: 설정"),
+            HistoryLine("type \"무엇을 찾고 있나요?\" \"디스플레이\" +enter", "화면 바뀜")))?.action)
+        assertEquals(false, Harness.screenShown(info, view(info, listOf("텍스트", "보안 및 개인정보 보호"), listOf("항목", "생체 인식"))))
+        assertEquals(true, Harness.screenShown(info, view(info, listOf("텍스트", "소프트웨어 정보"), listOf("항목", "One UI 버전"))))
+        // The settings search opens the parent page with the row highlighted: still a row to press.
+        assertEquals(true, Harness.screenStillListed(info, view(info, listOf("텍스트", "폰 정보"), listOf("항목", "상태 정보"), listOf("항목", "소프트웨어 정보"))))
+        assertEquals(false, Harness.screenStillListed(info, view(info, listOf("텍스트", "소프트웨어 정보"), listOf("항목", "One UI 버전"))))
     }
 
     @Test fun aNamedAppKeepsOtherAppNotesAway() {

@@ -21,6 +21,7 @@ object Harness {
     fun preDecide(goal: String, view: ScreenView, history: List<HistoryLine> = emptyList()): Auto? {
         emptyScreen(view, history)?.let { return it }
         mediaControl(goal, view, history)?.let { return it }
+        playlistAdd(goal, view, history)?.let { return it }
         if (!ShortcutGoals.allowsUiHeuristics(goal)) return null
         resumePrompt(goal, view)?.let { return it }
         unrelatedSheet(goal, view, history)?.let { return it }
@@ -117,6 +118,48 @@ object Harness {
             .filter { it.enabled && pattern.matches(it.label.trim()) }.singleOrNull() ?: return null
         if (history.takeLast(2).any { it.action == "click \"${control.label}\"" }) return null
         return Auto(AgentAction.Click(control.id), "음악 앱의 '${control.label}' 버튼")
+    }
+
+    private val addLabel = Regex("추가|담기|\\badd\\b",RegexOption.IGNORE_CASE)
+
+    /** The add button that was pressed for [query], if any ("click "현재 재생목록에 추가 · 아이유(IU) - 좋은 날"" → 바뀜). */
+    fun addedRow(query: String, history: List<HistoryLine>): String? = history.asReversed().firstNotNullOfOrNull { h ->
+        val label = Regex("^click \"(.*)\"$").matchEntire(h.action)?.groupValues?.get(1) ?: return@firstNotNullOfOrNull null
+        val row = label.substringAfter(" · ", "")
+        row.takeIf { addLabel.containsMatchIn(label.substringBefore(" · ")) && it.isNotEmpty() && h.outcome.contains("바뀜") &&
+            GoalText.rowScore(query, it) * 2 >= query.trim().split(Regex("\\s+")).size }
+    }
+
+    /**
+     * "<노래> 재생목록에 추가해줘" in a music app: type the song into its search field, press its search
+     * button, then press the add button on the result row that names the song. The small model kept
+     * pressing "재생목록 만들기" instead; these steps are the same in every player with a search box.
+     */
+    private fun playlistAdd(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
+        val query = GoalText.playlistAdd(goal) ?: return null
+        if (view.snapshot.home || addedRow(query, history) != null) return null
+        val wanted = query.trim().split(Regex("\\s+")).size
+        val adds = view.elements.filter { (it.kind == Kind.BUTTON || it.kind == Kind.ITEM) && it.enabled && it.label.contains(" · ") &&
+            addLabel.containsMatchIn(it.label.substringBefore(" · ")) }
+        if (adds.isNotEmpty()) {
+            val best = adds.maxByOrNull { GoalText.rowScore(query, it.label.substringAfter(" · ")) }!!
+            if (GoalText.rowScore(query, best.label.substringAfter(" · ")) * 2 >= wanted &&
+                history.none { it.action == "click \"${best.label}\"" })
+                return Auto(AgentAction.Click(best.id), "검색 결과 '${best.label.substringAfter(" · ").take(30)}'를 재생목록에 추가")
+        }
+        val q = GoalText.normalize(query)
+        val inputs = view.inputs.filter { it.enabled }
+        val field = inputs.firstOrNull { Regex("검색|search|찾기", RegexOption.IGNORE_CASE).containsMatchIn(it.label) }
+            ?: inputs.minByOrNull { it.bounds.top } ?: return null
+        if (!GoalText.normalize(field.value).contains(q)) {
+            if (history.count { it.action.startsWith("type ") && GoalText.normalize(it.action).contains(q) } >= 2) return null
+            return Auto(AgentAction.Type(field.id, query, true), "검색창에 '$query' 입력")
+        }
+        if (adds.isNotEmpty()) return null // results are shown but none names the song: the model scrolls or rephrases
+        val button = view.elements.firstOrNull { it.kind == Kind.BUTTON && it.enabled && Regex("^(?:검색|search)$", RegexOption.IGNORE_CASE).matches(it.label.trim()) }
+            ?: return null
+        if (history.takeLast(2).any { it.action == "click \"${button.label}\"" }) return null
+        return Auto(AgentAction.Click(button.id), "'$query' 검색 실행")
     }
 
     /** For a search goal, the query has to be visible (typed in a field or shown in results). */

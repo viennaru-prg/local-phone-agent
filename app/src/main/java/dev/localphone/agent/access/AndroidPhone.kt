@@ -51,12 +51,45 @@ class AndroidPhone(private val context: Context) : Phone {
             }
             else OpenAppResult(false, "'${match.app.display}' 실행 실패")
         }
-        is AppIndex.Match.Missing -> {
+        is AppIndex.Match.Missing -> inSecureFolder(name) ?: run {
             // Samsung Secure Folder apps are not listed when the OS hides that profile from launchers.
             val secureFolder = runCatching { context.packageManager.getPackageInfo("com.samsung.knox.securefolder", 0) }.isSuccess
             OpenAppResult(false, "'$name' 앱을 찾지 못함. 비슷한 앱: " + match.similar.joinToString(", ") { it.display } +
                 if (secureFolder) ". 보안 폴더 안의 앱이면 open_app \"보안 폴더\"로 연 뒤 그 안에서 누른다" else "")
         }
+    }
+
+    /**
+     * Apps inside Samsung Secure Folder are invisible to this profile's launcher APIs: open Secure
+     * Folder and tap the icon whose name matches ("클립스트림" → "Clipstream Player"). Null when
+     * Secure Folder is locked or has no such app, so the screen agent takes over (and asks to unlock).
+     */
+    private suspend fun inSecureFolder(name: String): OpenAppResult? {
+        fun matches(label: String) = GoalText.normalize(label).let { it.isNotEmpty() && it.contains(GoalText.normalize(name)) } ||
+            GoalText.soundsLike(name, label)
+        observe()?.takeIf { !it.home && matches(it.appLabel) }?.let { return OpenAppResult(true, "$ALREADY_OPEN: ${it.appLabel}") }
+        val folder = (apps.find("보안 폴더", allowFuzzy = false) as? AppIndex.Match.Found)?.app ?: return null
+        if (!apps.launch(folder)) return null
+        val (view, icon) = withTimeoutOrNull(4000) {
+            while (true) {
+                val view = observe()?.let(ScreenCompactor::compact)
+                if (view != null && view.snapshot.packageName == folder.packageName)
+                    view.elements.firstOrNull { it.enabled && matches(it.label) }?.let { return@withTimeoutOrNull view to it }
+                delay(150)
+            }
+            @Suppress("UNREACHABLE_CODE") null
+        } ?: return null
+        if (!perform(view, AgentAction.Click(icon.id))) return null
+        val opened = withTimeoutOrNull(4500) {
+            while (true) {
+                val now = observe()
+                if (now != null && now.packageName != folder.packageName && matches(now.appLabel)) return@withTimeoutOrNull true
+                delay(150)
+            }
+            @Suppress("UNREACHABLE_CODE") false
+        } == true
+        android.util.Log.i("AgentTools", "secure folder open '$name' via '${icon.label}' opened=$opened")
+        return if (opened) OpenAppResult(true, "열림: ${icon.label} (보안 폴더)") else null
     }
 
     override suspend fun media(key: MediaKey): Boolean {

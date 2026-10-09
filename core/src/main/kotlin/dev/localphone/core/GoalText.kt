@@ -116,6 +116,24 @@ object GoalText {
         return l.isNotEmpty() && words.any { w -> variants(w).any { l.contains(it) } }
     }
 
+    /**
+     * "클립스트림에서 아이유 좋은날 재생목록에 추가해줘" -> "아이유 좋은날": the song to search and add to
+     * the current playlist. Null for anything that is not "<song> (재생목록에) 추가/넣어/담아 줘".
+     */
+    fun playlistAdd(goal: String): String? {
+        val g = goal.trim().let { if (namedApp(it) != null) it.substringAfter("에서").trim() else it }
+        val m = Regex("^(.+?)\\s*(?:(?:현재\\s*)?(?:재생\\s*목록|플레이\\s*리스트)\\s*에?\\s*)?(?:추가|넣어|담아)\\s*(?:해\\s*)?(?:줘|주세요|줄래)?\\s*[.!?]?$")
+            .matchEntire(g) ?: return null
+        val query = m.groupValues[1].trim().replace(Regex("\\s*(?:을|를)$"), "").replace(Regex("\\s+(?:노래|음악|곡)$"), "").trim()
+        return query.takeIf { it.length >= 2 && !Regex("재생\\s*목록|플레이\\s*리스트").containsMatchIn(it) }
+    }
+
+    /** How many words of [query] a result row names ("아이유 좋은날" in "아이유(IU) - 좋은 날 [가사]" -> 2 of 2). */
+    fun rowScore(query: String, row: String): Int {
+        val r = normalize(row)
+        return query.trim().split(Regex("\\s+")).map(::normalize).filter { it.isNotEmpty() }.count { r.contains(it) || soundsLike(it, row) }
+    }
+
     /** The app named in "X에서 …" ("시계 앱에서 …" → "시계"), if any. */
     fun namedApp(goal: String): String? =
         Regex("^(.+?)\\s*(?:앱)?에서\\s").find(goal.trim())?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() && it.length <= 20 }

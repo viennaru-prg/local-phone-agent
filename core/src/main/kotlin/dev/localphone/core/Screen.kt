@@ -87,21 +87,36 @@ object ScreenCompactor {
         val children = Array(nodes.size) { mutableListOf<Int>() }
         nodes.forEachIndexed { index, node -> if (node.parent in nodes.indices) children[node.parent] += index }
         fun absorbs(n: RawNode) = n.clickable || n.longClickable || n.checkable || n.editable
-        fun visible(n: RawNode) = !n.bounds.empty && n.bounds.right > 0 && n.bounds.bottom > 0 &&
-            n.bounds.left < snapshot.width && n.bounds.top < snapshot.height
+        // A scroll list's off-box children can report on-screen bounds (ClipStream's search results
+        // "drawn" over its playlist): keep only nodes whose center is inside every scrolling ancestor.
+        fun insideScrollers(index: Int): Boolean {
+            val b = nodes[index].bounds
+            var p = nodes[index].parent
+            while (p in nodes.indices) {
+                val s = nodes[p].bounds
+                if (nodes[p].scrollable && !s.empty && (b.centerY !in s.top..s.bottom || b.centerX !in s.left..s.right)) return false
+                p = nodes[p].parent
+            }
+            return true
+        }
+        fun visible(n: RawNode, index: Int) = !n.bounds.empty && n.bounds.right > 0 && n.bounds.bottom > 0 &&
+            n.bounds.left < snapshot.width && n.bounds.top < snapshot.height && insideScrollers(index)
+        // A clickable container covering much of the screen is a panel, not a row: its texts stay separate.
+        val panelArea = snapshot.width.toLong() * snapshot.height * 3 / 10
+        fun isPanel(n: RawNode) = n.bounds.width.toLong() * n.bounds.height >= panelArea
 
         // Nearest absorbing ancestor for each node.
         val owner = IntArray(nodes.size) { -1 }
         nodes.forEachIndexed { index, node ->
             var p = node.parent
-            while (p in nodes.indices) { if (absorbs(nodes[p])) { owner[index] = p; break }; p = nodes[p].parent }
+            while (p in nodes.indices) { if (absorbs(nodes[p]) && !isPanel(nodes[p])) { owner[index] = p; break }; p = nodes[p].parent }
         }
         fun mergedText(root: Int): String {
             val parts = mutableListOf<String>()
             fun walk(i: Int) {
                 for (c in children[i]) {
                     val child = nodes[c]
-                    if (absorbs(child)) continue // gets its own element
+                    if (absorbs(child) || owner[c] != root) continue // gets its own element
                     if (child.ownLabel.isNotEmpty()) parts += child.ownLabel
                     walk(c)
                 }
@@ -113,7 +128,7 @@ object ScreenCompactor {
         data class Draft(val node: Int, val kind: Kind, val label: String, val value: String, val checked: Boolean?)
         val drafts = mutableListOf<Draft>()
         nodes.forEachIndexed { index, node ->
-            if (!visible(node)) return@forEachIndexed
+            if (!visible(node, index)) return@forEachIndexed
             when {
                 node.editable -> drafts += Draft(index, Kind.INPUT, node.hint.ifBlank { node.desc }.ifBlank { idWord(node.viewId) },
                     if (node.text == node.hint) "" else node.text, null)
@@ -127,7 +142,17 @@ object ScreenCompactor {
             }
         }
         // Remove exact duplicates (same text drawn twice, e.g. a TextView and its contentDescription parent).
-        val unique = drafts.distinctBy { Triple(it.kind, it.label, nodes[it.node].bounds) }
+        val deduped = drafts.distinctBy { Triple(it.kind, it.label, nodes[it.node].bounds) }
+        // The same button on every row ("현재 재생목록에 추가" ×12) is useless without its row: name it
+        // after the texts beside it ("현재 재생목록에 추가 · 아이유(IU) - 좋은 날 …").
+        val repeated = deduped.filter { it.kind == Kind.BUTTON || it.kind == Kind.ITEM }.groupingBy { it.label }.eachCount().filterValues { it >= 2 }.keys
+        val unique = deduped.map { d ->
+            if (d.label !in repeated) return@map d
+            val b = nodes[d.node].bounds
+            val row = deduped.filter { t -> t.kind == Kind.TEXT && nodes[t.node].bounds.centerY in b.top..b.bottom && nodes[t.node].bounds.right <= b.right }
+                .sortedWith(compareBy({ nodes[it.node].bounds.top }, { nodes[it.node].bounds.left })).joinToString(" ") { it.label }
+            if (row.isBlank()) d else d.copy(label = "${d.label} · $row")
+        }
         // A dense map can have scores of road labels above its bottom '안내 시작' control. Preserve
         // meaningful controls before trimming, then restore their screen order for the model.
         val relevant = GoalText.targetWords(goal)

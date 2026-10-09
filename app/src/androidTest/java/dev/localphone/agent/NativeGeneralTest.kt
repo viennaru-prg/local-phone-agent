@@ -11,6 +11,56 @@ import org.junit.runner.RunWith
 /** Real selected model, an unregistered arbitrary app and live-derived menu affordances. */
 @RunWith(AndroidJUnit4::class)
 class NativeGeneralTest {
+    @Test fun navigationStopWordingsFinishWithoutExploringTheNormalMapAfterExit() = runBlocking {
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.app
+        for (goal in listOf("네비 꺼줘", "네비 종료해줘")) {
+            var phase = "guidance"
+            var calls = 0
+            fun snapshot(): Snapshot {
+                fun node(i: Int, label: String, id: String = "", selected: Boolean = false, button: Boolean = true) = RawNode("r.$i", 0,
+                    text = label, viewId = id, clickable = button, selected = selected,
+                    className = if (button) "Button" else "TextView", bounds = Bounds(0,100+i*180,1000,200+i*180))
+                val nodes = if (phase == "normal") listOf(node(0, "네이버지도 검색"), node(1, "길찾기"),
+                    node(2, "음식점"), node(3, "카페"), node(4, "발견 탭 발견", selected = true), node(5, "내비게이션 탭 내비게이션"))
+                else buildList {
+                    add(node(0, "지도", button = false)); add(node(1, "49 m", button = false))
+                    add(node(2, "검색")); add(node(3, "주유소")); add(node(4, "Spotify"))
+                    add(node(5, "", "example:id/v_reroute")); add(node(6, "", "example:id/v_drawer"))
+                    add(node(7, "5.1 km", button = false))
+                    if (phase == "menu") { add(node(8, "지도설정")); add(node(9, "주행설정")); add(node(10, "안내 종료")) }
+                }
+                return Snapshot("com.nhn.android.nmap", "네이버지도", listOf(RawNode("r",-1,bounds=Bounds(0,0,1000,2400)))+nodes,1000,2400)
+            }
+            val phone = object : Phone {
+                override suspend fun observe() = snapshot()
+                override suspend fun perform(view: ScreenView, action: AgentAction): Boolean {
+                    val label = (action as? AgentAction.Click)?.let { view.element(it.id)?.label }.orEmpty()
+                    if (label.contains("메뉴·옵션")) phase = if (phase == "menu") "guidance" else "menu"
+                    else if (label == "안내 종료") phase = "normal"
+                    else return false
+                    return true
+                }
+                override suspend fun openApp(name: String) = OpenAppResult(false,"이미 요청한 앱 화면")
+                override suspend fun media(key: MediaKey) = false
+                override fun now() = android.os.SystemClock.elapsedRealtime()
+            }
+            val model = object : LanguageModel {
+                override suspend fun decide(prompt: ModelPrompt, grammar: String): String {
+                    calls++
+                    return app.llm.decide(prompt,grammar).also {
+                        android.util.Log.i("AgentVerification", "NAV_STOP_DECISION wording=$goal phase=$phase raw=$it")
+                    }
+                }
+            }
+            val result = Agent(model,phone,RecipeBook({null}, {}),{emptyList()},AgentConfig(maxSteps=6,withNote=app.prefs.withNote))
+                .run(goal)
+            assertEquals(result.toString(),Outcome.DONE,result.outcome)
+            assertEquals("normal",phase)
+            assertTrue(result.history.any { it.action.contains("안내 종료") })
+            android.util.Log.i("AgentVerification", "NAV_STOP wording=$goal phase=$phase calls=$calls normalMapVerified=true")
+        }
+        Unit
+    }
     @Test fun searchThenPlaybackCompletesBothPartsWithTheRealModel() = runBlocking {
         val app = InstrumentationRegistry.getInstrumentation().targetContext.app
         var phase = "home"

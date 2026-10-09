@@ -82,6 +82,17 @@ object Harness {
         return GoalText.matches(view.snapshot.appLabel, names) || view.elements.any { e -> GoalText.matches(e.label, names) }
     }
 
+    /** Selected tab or actual title, not a matching row in the previous menu. Any app can supply it. */
+    fun openScreenEvidence(goal: String, view: ScreenView): Boolean {
+        if (!GoalText.opensScreen(goal) || GoalScope.multiple(goal) || GoalText.searchQuery(goal) != null) return false
+        val names = GoalText.targetWords(goal).filter { it !in generic && it.length >= 2 }
+        if (names.isEmpty()) return false
+        return view.elements.any { e ->
+            (e.selected || (e.kind == Kind.TEXT && e.bounds.bottom <= view.snapshot.height * 0.30)) &&
+                names.all { GoalText.matches(e.label, listOf(it)) }
+        }
+    }
+
     /** For a search goal, the query has to be visible (typed in a field or shown in results). */
     fun searchShown(goal: String, view: ScreenView): Boolean {
         val q = GoalText.searchQuery(goal)?.let(GoalText::normalize) ?: return true

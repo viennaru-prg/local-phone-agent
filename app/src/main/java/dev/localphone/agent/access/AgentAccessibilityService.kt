@@ -35,6 +35,7 @@ class AgentAccessibilityService : AccessibilityService() {
     private var overlay: LinearLayout? = null
     private var status: TextView? = null
     var onCancel: (() -> Unit)? = null
+    @Volatile var observationDiagnostic: String = "not observed"; private set
 
     // Window id of recent observations, used to find the node an action targets on the live screen.
     private val windowOf = java.util.Collections.synchronizedMap(object : java.util.IdentityHashMap<Snapshot, Int>() {})
@@ -57,9 +58,17 @@ class AgentAccessibilityService : AccessibilityService() {
         // after a launch. On the S25 this kept returning Yogiyo while NAVER Map was in front.
         // Invalidate on demand as well as subscribing to window/content events on older Android.
         if (android.os.Build.VERSION.SDK_INT >= 33) clearCache()
-        val window = targetWindow() ?: return null
-        val root = window.root ?: return null
+        val window = targetWindow()
+        val root = window?.root ?: rootInActiveWindow
+        if (root == null) {
+            val summary = windows.joinToString { "${it.id}:${it.type}:active=${it.isActive}:focused=${it.isFocused}" }
+            observationDiagnostic = "NO_ROOT windows=$summary"
+            Log.w(TAG, observationDiagnostic)
+            return null
+        }
         val pkg = root.packageName?.toString().orEmpty()
+        val rootWindowId = root.windowId
+        if (pkg == packageName) { root.recycleCompat(); observationDiagnostic = "OWN_APP_FOREGROUND"; return null }
         val display = resources.displayMetrics
         val nodes = mutableListOf<RawNode>()
         // Each child read is a call into the other app; a busy app (NAVER Map starting up) answers slowly.
@@ -86,10 +95,15 @@ class AgentAccessibilityService : AccessibilityService() {
             }
         }
         try { visit(root, "r", -1, 0) } finally { root.recycleCompat() }
-        if (nodes.isEmpty()) return null
+        if (nodes.isEmpty()) {
+            observationDiagnostic = "EMPTY_TREE package=$pkg window=${window?.id}"
+            Log.w(TAG, observationDiagnostic)
+            return null
+        }
+        observationDiagnostic = "OK package=$pkg window=${window?.id} nodes=${nodes.size}"
         val snapshot = Snapshot(pkg, appLabel(pkg), nodes, display.widthPixels, display.heightPixels, home = pkg == launcherPackage)
         synchronized(recent) {
-            recent.addLast(snapshot); windowOf[snapshot] = window.id
+            recent.addLast(snapshot); windowOf[snapshot] = window?.id ?: rootWindowId
             while (recent.size > 6) windowOf.remove(recent.removeFirst())
         }
         return snapshot
@@ -127,6 +141,7 @@ class AgentAccessibilityService : AccessibilityService() {
 
     suspend fun click(snapshot: Snapshot, index: Int, long: Boolean): Boolean {
         val node = live(snapshot, index) ?: return false
+        if (!node.isEnabled || !node.isVisibleToUser) { node.recycleCompat(); return false }
         val action = if (long) AccessibilityNodeInfo.ACTION_LONG_CLICK else AccessibilityNodeInfo.ACTION_CLICK
         // The element itself, then the nearest ancestor that handles clicks (Compose/RecyclerView rows).
         var target: AccessibilityNodeInfo? = node
@@ -199,6 +214,7 @@ class AgentAccessibilityService : AccessibilityService() {
     // ---------- status overlay ----------
 
     fun showStatus(text: String) {
+        if (instance !== this) return // A service rebind invalidates the previous overlay token.
         if (overlay == null) {
             val panel = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
@@ -214,7 +230,13 @@ class AgentAccessibilityService : AccessibilityService() {
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
                 PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = dp(36) }
-            getSystemService(WindowManager::class.java).addView(panel, params)
+            try {
+                getSystemService(WindowManager::class.java).addView(panel, params)
+            } catch (e: WindowManager.BadTokenException) {
+                status = null
+                Log.w(TAG, "overlay token unavailable after service rebind", e)
+                return
+            }
             overlay = panel
         }
         status?.text = text

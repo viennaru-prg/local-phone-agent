@@ -151,7 +151,23 @@ object ScreenCompactor {
     private fun clip(s: String) = s.replace(Regex("\\s+"), " ").trim().let { if (it.length > MAX_LABEL) it.take(MAX_LABEL - 1) + "…" else it }
     private fun isButton(n: RawNode) = n.className.endsWith("Button") || n.className.endsWith("ImageView")
     /** "com.nhn.android.nmap:id/btn_search" -> "btn search"; better than nothing for unlabeled icons. */
-    fun idWord(viewId: String) = viewId.substringAfterLast('/').replace('_', ' ').trim()
+    fun idWord(viewId: String): String {
+        val raw = viewId.substringAfterLast('/').replace(Regex("([a-z])([A-Z])"), "$1 $2").replace('_', ' ').trim()
+        val words = raw.lowercase().split(' ')
+        // Hints from the live resource name, for unlabeled icons in any app. They describe an
+        // affordance only; the model still chooses the next action for the full user goal.
+        val hint = when {
+            words.any { it in setOf("drawer", "menu", "overflow", "more", "options") } -> "메뉴·옵션 열기"
+            "reroute" in words -> "경로 다시 계산"
+            words.any { it in setOf("refresh", "reload") } -> "새로고침"
+            "close" in words -> "닫기"
+            "cancel" in words -> "취소"
+            "back" in words -> "뒤로"
+            "search" in words -> "검색"
+            else -> ""
+        }
+        return if (hint.isBlank()) raw else "$hint ($raw)"
+    }
     private fun zone(b: Bounds, height: Int): String = when {
         height <= 0 -> ""
         b.bottom <= height * 0.12 -> "상단"

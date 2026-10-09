@@ -47,7 +47,7 @@ class ScreenTest {
             RawNode("r.0", 0, viewId = "p:id/btn_search", className = "ImageButton", clickable = true, bounds = b(10, 60)),
         ), 1000, 2000)
         val e = ScreenCompactor.compact(snap).elements.single()
-        assertEquals("btn search", e.label); assertEquals(Kind.BUTTON, e.kind); assertEquals("상단", e.zone)
+        assertEquals("검색 (btn search)", e.label); assertEquals(Kind.BUTTON, e.kind); assertEquals("상단", e.zone)
     }
 
     @Test fun grammarListsOnlyRealIds() {

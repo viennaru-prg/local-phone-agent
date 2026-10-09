@@ -47,7 +47,8 @@ object GoalText {
      */
     fun targetWords(goal: String): List<String> {
         val afterApp = Regex("^.+?에서\\s+(.+)$").find(goal.trim())?.groupValues?.get(1) ?: goal
-        return words(afterApp).ifEmpty { words(goal) }
+        val operation = if (Regex("꺼|종료|끝내|중지|그만").containsMatchIn(afterApp)) listOf("종료", "끝내", "중지", "꺼짐", "해제") else emptyList()
+        return (words(afterApp).ifEmpty { words(goal) } + operation).distinct()
     }
 
     /**
@@ -55,8 +56,8 @@ object GoalText {
      * tends to be a long explanation; spoken results should be a few words.
      */
     fun spokenResult(goal: String, modelSay: String): String {
-        searchQuery(goal)?.let { return "'$it' 검색했어요." }
-        if (opensScreen(goal)) {
+        if (!GoalScope.multiple(goal)) searchQuery(goal)?.let { return "'$it' 검색했어요." }
+        if (!GoalScope.multiple(goal) && opensScreen(goal)) {
             val names = targetWords(goal).filter { it !in setOf("화면", "메뉴", "탭", "페이지", "보여", "열어", "앱") }
             if (names.isNotEmpty()) {
                 val what = goal.split(Regex("\\s+")).filter { w -> names.any { normalize(w).startsWith(it) } }

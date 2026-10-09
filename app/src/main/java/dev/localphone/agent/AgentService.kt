@@ -78,11 +78,14 @@ class AgentService : Service() {
             a11y.onCancel = { if (id == runId) { job?.cancel(); finish("작업을 멈췄습니다.", speak = false, id = id) } }
             a11y.showStatus("“$goal”")
             val listener = object : AgentListener {
-                override fun progress(text: String) { if (id == runId) a11y.showStatus(text) }
-                override fun needUser(text: String) { a11y.showStatus(text); scope.launch { speaker.say(text) } }
+                override fun progress(text: String) { if (id == runId) AgentAccessibilityService.instance?.showStatus(text) }
+                override fun needUser(text: String) { AgentAccessibilityService.instance?.showStatus(text); scope.launch { speaker.say(text) } }
                 override fun step(record: StepRecord) {
-                    trace.step(record, app.llm.lastStats)
-                    a11y.showStatus("${record.index}. ${record.action} → ${record.outcome}")
+                    trace.step(record, if (record.modelMs > 0) app.llm.lastStats else null)
+                    AgentAccessibilityService.instance?.let { current ->
+                        current.onCancel = { if (id == runId) { job?.cancel(); finish("작업을 멈췄습니다.", speak = false, id = id) } }
+                        current.showStatus("${record.index}. ${record.action} → ${record.outcome}")
+                    }
                 }
             }
             val phone = AndroidPhone(this@AgentService)
@@ -99,6 +102,7 @@ class AgentService : Service() {
                 AgentResult(Outcome.FAILED, "오류로 중단했어요: ${e.message}", emptyList())
             }
             trace.finish(result)
+            if (result.outcome == Outcome.FAILED) trace.observation(AgentAccessibilityService.instance?.observationDiagnostic)
             if (id != runId) return@launch
             a11y.showStatus(if (result.outcome == Outcome.DONE) "완료: ${result.say}" else result.say)
             when (result.outcome) {
@@ -182,6 +186,7 @@ class Trace(dir: File, goal: String, metadata: Map<String, Any?> = emptyMap()) {
             "executionMs" to ms, "targetMs" to 10_000, "withinTarget" to (ms <= 10_000)))
     }
     fun cancelled() { write(mapOf("type" to "cancelled", "executionFinished" to finished)) }
+    fun observation(diagnostic: String?) { write(mapOf("type" to "observation", "diagnostic" to diagnostic)) }
     fun closed() { write(mapOf("type" to "closed", "executionFinished" to finished, "elapsedMs" to (android.os.SystemClock.elapsedRealtime() - start))) }
     @Synchronized private fun write(value: Any) = runCatching { file.appendText(gson.toJson(value) + "\n") }
         .onFailure { Log.w("AgentStep", "trace write failed", it) }

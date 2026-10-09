@@ -53,6 +53,7 @@ interface Tools {
 object Router {
     private val navVerb = Regex("가자|가\\s*줘|가요|안내|길\\s*찾|네비|내비|데려|가는\\s*길")
     fun isNavigationGoal(goal: String): Boolean {
+        if (GoalScope.multiple(goal)) return false
         if (!navVerb.containsMatchIn(goal) || Regex("종료|끝내|그만|취소|꺼").containsMatchIn(goal)) return false
         if (Regex("^(?:네이버지도|지도|내비|네비|내비게이션|네비게이션)(?:앱)?(?:켜|열어|실행)(?:줘|해줘|주세요)?$")
                 .matches(GoalText.normalize(goal))) return false
@@ -84,7 +85,8 @@ object Router {
         Route.Screen -> route
     }
 
-    fun allowsMedia(goal: String): Boolean = !navVerb.containsMatchIn(goal) &&
+    fun allowsMedia(goal: String): Boolean = (!navVerb.containsMatchIn(goal) ||
+        (GoalScope.multiple(goal) && Regex("음악|노래|곡").containsMatchIn(goal))) &&
         GoalText.searchQuery(goal) == null && GoalText.namedApp(goal) == null &&
         Regex("음악|노래|곡|재생|멈춰|일시\\s*정지|다음|이전").containsMatchIn(goal)
 
@@ -149,7 +151,7 @@ class Assistant(
         var routeMs = 0L
         // With no local destination, resolve it in the actual map UI. Do not ask a classifier whose
         // grammar omits navigation: it picked music PAUSE for '회사로 안내해 줘' on the S25.
-        val candidate = Router.quick(goal, places) ?: if (Router.isNavigationGoal(goal) || !Router.mightUseTool(goal)) Route.Screen else run {
+        val candidate = Router.quick(goal, places) ?: if (!Router.allowsMedia(goal) || GoalScope.multiple(goal)) Route.Screen else run {
             listener.progress("명령 확인 중…")
             val all = places.all()
             val t0 = System.nanoTime()

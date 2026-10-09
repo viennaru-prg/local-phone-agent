@@ -18,6 +18,7 @@ interface Phone {
     /** A fresh observed-node tap when an app accepts ACTION_CLICK without responding. */
     suspend fun tap(view: ScreenView, id: Int): Boolean = perform(view, AgentAction.Click(id))
     suspend fun openApp(name: String): OpenAppResult
+    fun matchesApp(view: ScreenView, name: String): Boolean = GoalText.normalize(view.snapshot.appLabel) == GoalText.normalize(name)
     suspend fun media(key: MediaKey): Boolean
     fun now(): Long
 }
@@ -70,6 +71,7 @@ class Agent(
         var replayed = false
         var modelSteps = 0
         var rejectedDone = 0
+        val ineffective = mutableMapOf<Pair<Int, String>, Int>()
     }
 
     /** The model's completion check: [ok] plus a one-line reason (or, when ok, the result to tell the user). */
@@ -81,9 +83,10 @@ class Agent(
             return Verdict(evidence.complete, evidence.reason)
         }
         // Hard evidence first: a search is not done while the query appears nowhere on screen.
+        if (Harness.openScreenEvidence(goal, view)) return Verdict(true, GoalText.spokenResult(goal, ""))
         if (!Harness.searchShown(goal, view)) return Verdict(false, "검색어가 화면에 아직 없음")
         if (!Harness.screenShown(goal, view)) return Verdict(false, "요청한 화면의 이름이 보이지 않음")
-        listener.progress("완료 여부 확인 중…")
+        listener.progress("전체 목표 완료 여부 확인 중…")
         val raw = model.decide(Prompts.verify(goal, notes(), run.history, view, config.withNote), Prompts.VERIFY_GRAMMAR)
         val json = runCatching { com.google.gson.JsonParser.parseString(raw).asJsonObject }.getOrNull()
             ?: return Verdict(false, "확인 응답 형식 오류")
@@ -107,6 +110,16 @@ class Agent(
         var view = observe() ?: return fail(run, "화면을 읽을 수 없습니다. 접근성 서비스가 켜져 있는지 확인해 주세요.")
         navigation?.observe(view)
 
+        // Resolve any explicitly named installed app through Android; never spend a model call
+        // rediscovering the launcher. The complete goal remains unchanged for the screen loop.
+        GoalText.namedApp(goal)?.let { app ->
+            if (!phone.matchesApp(view, app)) {
+                val (outcome, next) = execute(run, AgentAction.OpenApp(app), view)
+                listener.step(StepRecord(0, "android_api", "", "", "open_app \"$app\"", outcome, "명령에 명시된 앱에서 전체 목표를 계속 수행", 0, phone.now() - started))
+                view = next
+            } else run.history += HistoryLine("open_app \"$app\"", "이미 요청한 앱이 전면에 있음")
+        }
+
         if (previous.isEmpty()) recipes.find(goal)?.let { recipe ->
             listener.progress("기억한 방법으로 실행 중…")
             view = replay(run, recipe, view)
@@ -119,6 +132,10 @@ class Agent(
             navigation?.observe(view)?.takeIf { it.complete }?.let {
                 listener.step(StepRecord(index, "navigation", view.render(), "", "verify", "완료", it.reason, 0, phone.now() - started))
                 return finish(run, goal, "길안내를 시작했어요.")
+            }
+            if (Harness.openScreenEvidence(goal, view)) {
+                listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "요청한 화면의 제목·선택 탭 확인", 0, phone.now() - started))
+                return finish(run, goal, "")
             }
             // Lock screens are the user's: ask them to unlock and wait, never touch the pattern/PIN.
             if (Harness.authScreen(view)) {
@@ -146,21 +163,47 @@ class Agent(
             listener.progress("다음 동작 판단 중… ($index)")
             val prompt = Prompts.step(goal, notes(), run.history, view, config.withNote)
             val t0 = phone.now()
-            val raw = model.decide(prompt, ActionGrammar.forView(view, config.withNote))
+            val fingerprint = progressFingerprint(view, goal)
+            val excluded = view.elements.filter { e ->
+                (run.ineffective[fingerprint to "click \"${e.label}\""] ?: 0) > 0 ||
+                    (run.ineffective[fingerprint to "long_click \"${e.label}\""] ?: 0) > 0
+            }.map { it.id }.toSet()
+            val raw = model.decide(prompt, ActionGrammar.forView(view, config.withNote, excluded))
             val modelMs = phone.now() - t0
             run.modelSteps++
-            val decision = try { ActionParser.parse(raw, view) } catch (e: BadModelOutput) {
+            var decision = try { ActionParser.parse(raw, view) } catch (e: BadModelOutput) {
                 run.history += HistoryLine("(잘못된 출력)", e.message ?: "형식 오류")
                 listener.step(StepRecord(index, "model", view.render(), raw, "invalid", e.message.orEmpty(), "", modelMs, phone.now() - started))
                 if (++run.badOutput >= config.maxBadOutput) return fail(run, "AI 응답을 해석하지 못했습니다.")
                 continue
             }
             run.badOutput = 0
-            val action = decision.action
+            val liveView = observe() ?: view
+            if (liveView.snapshot.packageName != view.snapshot.packageName) {
+                listener.step(StepRecord(index, "harness", "", raw, "stop", "전면 앱 전환으로 중단", "모델 계산 중 다른 앱이 전면에 나타나 이전 목표로 조작하지 않음", modelMs, phone.now() - started))
+                return fail(run, "실행 중 다른 앱으로 전환되어 중단했어요. 원래 작업 화면에서 다시 요청해 주세요.")
+            }
+            val bound = ActionGrounding.rebind(decision.action, view, liveView)
+            if (bound == null) {
+                run.history += HistoryLine("판단 중 화면 변경", "최신 화면에서 다시 판단")
+                listener.step(StepRecord(index, "harness", "", raw, "reobserve", "이전 화면 판단 폐기", "앱 전환 또는 조작 대상의 식별·상태가 바뀜", modelMs, phone.now() - started))
+                view = liveView
+                continue
+            }
+            if ((decision.action is AgentAction.Click && (decision.action as AgentAction.Click).id in excluded) ||
+                (decision.action is AgentAction.LongClick && (decision.action as AgentAction.LongClick).id in excluded)) {
+                record(run, index, "harness", view, raw, decision, "같은 상태에서 효과 없던 동작이라 재실행하지 않음", modelMs, started)
+                if (++run.noChange >= config.maxNoChange) return fail(run, "다른 실행 경로를 찾지 못했습니다.")
+                continue
+            }
+            view = liveView
+            decision = decision.copy(action = bound)
+            val action = bound
             when (action) {
                 is AgentAction.Done -> {
                     // A second opinion on the same screen before declaring success or learning the path.
-                    val verdict = if (navigation != null || run.history.isNotEmpty()) verify(goal, run, view) else Verdict(true, "")
+                    view = observe() ?: view
+                    val verdict = verify(goal, run, view)
                     if (!verdict.ok) {
                         record(run, index, "model", view, raw, decision, "검증 실패: ${verdict.text}", modelMs, started)
                         if (++run.rejectedDone >= 2) return fail(run, "작업이 목표대로 끝났는지 확인하지 못했습니다. (${verdict.text})")
@@ -210,10 +253,14 @@ class Agent(
         }
         if (!finishing) return null
         // A submitted search whose query is now on screen is done; no model opinion needed.
-        if (action is AgentAction.Type && Harness.searchShown(goal, next)) {
+        if (action is AgentAction.Type && !GoalScope.multiple(goal) && Harness.searchShown(goal, next)) {
             run.history += HistoryLine("완료 확인", "검색어가 화면에 보임")
             listener.step(StepRecord(index, "harness", next.render(), "", "verify", "완료", "검색 제출 확인", 0, phone.now() - started))
             return finish(run, goal, "")
+        }
+        if (action is AgentAction.Type && GoalScope.multiple(goal) && Harness.searchShown(goal, next)) {
+            run.history += HistoryLine("일부 목표 확인", "검색어 제출만 확인됨. 전체 목표의 남은 작업을 계속해야 함")
+            return null // A search submission is never the terminal action of a search-then-other-task goal.
         }
         val verdict = verify(goal, run, next)
         if (!verdict.ok) return null
@@ -349,6 +396,18 @@ class Agent(
             }
         }
         run.history += HistoryLine(description, outcome)
+        // GPS distances, elapsed time and other text changes do not prove the requested operation
+        // advanced. Remember ineffective actions per control state and exclude them next time.
+        if (action !is AgentAction.Wait && action !is AgentAction.Media && action !is AgentAction.OpenApp &&
+            progressFingerprint(view, run.goal) == progressFingerprint(next, run.goal)) {
+            val key = progressFingerprint(view, run.goal) to description
+            run.ineffective[key] = (run.ineffective[key] ?: 0) + 1
+            if (outcome.contains("바뀜")) {
+                run.noChange++
+                run.history[run.history.lastIndex] = run.history.last().copy(outcome = "변화 없음 (동적 텍스트만 바뀜)")
+                return "변화 없음 (동적 텍스트만 바뀜)" to next
+            }
+        }
         return outcome to next
     }
 
@@ -404,6 +463,14 @@ class Agent(
     }
 
     private fun fail(run: Run, message: String) = AgentResult(Outcome.FAILED, message, run.history)
+
+    private fun progressFingerprint(view: ScreenView, goal: String): Int {
+        val controls = view.elements.filter { it.kind != Kind.TEXT || it.selected }
+            .map { listOf(it.kind, it.label.replace(Regex("[0-9]+(?:[.:][0-9]+)*"), "#"), it.enabled, it.selected, it.checked, it.value) }
+        val results = view.elements.filter { it.kind == Kind.TEXT && GoalText.matches(it.label, GoalText.targetWords(goal)) }
+            .map { it.label }
+        return listOf(view.snapshot.packageName, controls, results).hashCode()
+    }
 }
 
 /**
@@ -430,6 +497,7 @@ object Guard {
             else -> return null
         }
         val label = view.element(id)?.label.orEmpty()
+        if (view.element(id)?.enabled != true) return "비활성 요소라 실행하지 않음"
         if (protected.containsMatchIn(label)) return "보호된 동작이라 실행하지 않음"
         // Swapping origin and destination silently reverses a route the user asked for.
         if (swap.containsMatchIn(label) && !Regex("출발").containsMatchIn(goal)) return "출발지와 도착지를 바꾸는 버튼이라 누르지 않음"

@@ -6,10 +6,10 @@ package dev.localphone.core
  */
 object ActionGrammar {
     /** [withNote] = the model writes a short reasoning note first; without it the answer is about half as long. */
-    fun forView(view: ScreenView, withNote: Boolean = true): String {
-        val all = view.elements.map { it.id }
-        val inputs = view.inputs.map { it.id }
-        val lists = view.lists.map { it.id }
+    fun forView(view: ScreenView, withNote: Boolean = true, excludedIds: Set<Int> = emptySet()): String {
+        val all = view.elements.filter { it.kind != Kind.TEXT && it.enabled && it.id !in excludedIds }.map { it.id }
+        val inputs = view.inputs.filter { it.enabled }.map { it.id }
+        val lists = view.lists.filter { it.enabled }.map { it.id }
         val actions = mutableListOf("open", "back", "wait", "media", "done", "ask", "fail", "scroll")
         if (all.isNotEmpty()) actions += listOf("click", "longclick")
         if (inputs.isNotEmpty()) actions += "type"

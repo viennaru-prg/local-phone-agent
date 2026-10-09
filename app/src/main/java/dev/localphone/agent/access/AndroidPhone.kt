@@ -34,6 +34,9 @@ class AndroidPhone(private val context: Context) : Phone {
         service?.tapObserved(view.snapshot, it.node)
     } ?: false
 
+    override fun matchesApp(view: ScreenView, name: String): Boolean =
+        (apps.find(name, allowFuzzy = false) as? AppIndex.Match.Found)?.app?.packageName == view.snapshot.packageName
+
     override suspend fun openApp(name: String): OpenAppResult = when (val match = apps.find(name)) {
         is AppIndex.Match.Found -> {
             // Already in front (spoken "유튜브" vs label "YouTube"): do not restart it.

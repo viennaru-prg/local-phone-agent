@@ -50,6 +50,43 @@ class NavigationTest {
         assertEquals(AgentAction.Click(1), s.nextAction(map, 0)?.action)
     }
 
+    /** NAVER's route screen: a horizontal "v frequents recycler view" showing four places at a time. */
+    private fun frequents(vararg places: String): ScreenView {
+        val nodes = mutableListOf(
+            RawNode("r", -1, bounds = Bounds(0, 0, 1000, 2000)),
+            RawNode("r.0", 0, text = "도착지 입력", clickable = true, bounds = Bounds(0, 200, 1000, 300)),
+            RawNode("r.1", 0, viewId = "com.nhn.android.nmap:id/v_frequents_recycler_view", scrollable = true, bounds = Bounds(0, 600, 1000, 700)),
+        )
+        places.forEachIndexed { i, p -> nodes += RawNode("r.1.$i", 2, text = p, clickable = true, bounds = Bounds(i * 250, 600, i * 250 + 240, 700)) }
+        return ScreenCompactor.compact(Snapshot(NavigationSession.NAVER_MAP, "네이버지도", nodes, 1000, 2000))
+    }
+
+    @Test fun aFrequentPlaceBeyondTheFirstPageIsFoundByPagingTheCarousel() {
+        val s = NavigationSession.forGoal("수원 집으로 안내해 줘")!!
+        val first = frequents("집", "회사", "수요모…", "일요모…")
+        s.observe(first)
+        val scroll = s.nextAction(first, 0)?.action
+        assertTrue(scroll is AgentAction.Scroll && scroll.dir == ScrollDir.RIGHT, "$scroll")
+        val second = frequents("수요모…", "일요모…", "수원집")
+        s.observe(second)
+        val click = s.nextAction(second, 0)?.action as AgentAction.Click
+        assertEquals("수원집", second.element(click.id)?.label)
+    }
+
+    @Test fun aCutNameInTheCarouselStillMatches() {
+        val s = NavigationSession.forGoal("수요모임으로 안내해줘")!!
+        val v = frequents("집", "회사", "수요모…", "일요모…")
+        s.observe(v)
+        assertEquals("수요모…", v.element((s.nextAction(v, 0)?.action as AgentAction.Click).id)?.label)
+    }
+
+    @Test fun theCarouselEndStopsPaging() {
+        val s = NavigationSession.forGoal("부산 별장으로 안내해줘")!!
+        val v = frequents("집", "회사")
+        s.observe(v); assertTrue(s.nextAction(v, 0)?.action is AgentAction.Scroll)
+        s.observe(v); assertNull(s.nextAction(v, 0)) // same screen after the scroll: end of the list
+    }
+
     @Test fun endGuidanceOpensTheDrawerPressesEndAndConfirmsTheDrivingScreenIsGone() {
         fun items(v: ScreenView) = v.copy(elements = v.elements.map { e -> e.copy(kind = Kind.ITEM) })
         val goal = "길안내 종료해줘"

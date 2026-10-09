@@ -698,7 +698,7 @@ object Guard {
     private val delete = Regex("삭제|delete|remove|제거|초기화|reset", RegexOption.IGNORE_CASE)
     private val swap = Regex("출발지.*도착지.*(?:전환|변경|바꾸기)|swap", RegexOption.IGNORE_CASE)
     private val install = Regex("설치|업데이트|새\\s*버전|install|update", RegexOption.IGNORE_CASE)
-    private val create = Regex("만들기|생성|새로\\s*만들|이름\\s*변경|편집|\\bcreate\\b|\\brename\\b|\\bedit\\b", RegexOption.IGNORE_CASE)
+    private val create = Regex("^(?:등록|수정)$|만들기|생성|새로\\s*만들|이름\\s*변경|편집|\\bcreate\\b|\\brename\\b|\\bedit\\b", RegexOption.IGNORE_CASE)
     fun blocked(goal: String, action: AgentAction, view: ScreenView): String? {
         if (action is AgentAction.Media && !Router.allowsMedia(goal)) return "명령에 없는 미디어 동작이라 실행하지 않음"
         val id = when (action) {
@@ -713,7 +713,7 @@ object Guard {
         // Swapping origin and destination silently reverses a route the user asked for.
         if (swap.containsMatchIn(label) && !Regex("출발").containsMatchIn(goal)) return "출발지와 도착지를 바꾸는 버튼이라 누르지 않음"
         // Creating/renaming/editing things was never asked for by "음악 재생해줘" (it opened 재생목록 만들기 3 times).
-        if (create.containsMatchIn(label) && !Regex("만들|생성|이름|변경|편집|바꿔|새로|create|rename|edit", RegexOption.IGNORE_CASE).containsMatchIn(goal))
+        if (create.containsMatchIn(label) && !Regex("만들|생성|이름|변경|편집|바꿔|새로|등록|수정|create|rename|edit", RegexOption.IGNORE_CASE).containsMatchIn(goal))
             return "목표에 없는 만들기·편집 동작이라 실행하지 않음"
         // An app's "새 버전 1.1.108을 설치할 수 있습니다" banner led into the unknown-sources settings.
         if (install.containsMatchIn(label) && !install.containsMatchIn(goal)) return "목표에 없는 설치·업데이트라 누르지 않음"

@@ -22,6 +22,9 @@ class NavigationSession(val goal: String, private val names: List<String>) {
     private var previewSeen = false
     private var startAttempts = 0
     private var endSteps = 0
+    private var carouselScrolls = 0
+    private var carouselSignature: Int? = null
+    private var carouselEnd = false
     private var lastStartAt = Long.MIN_VALUE / 2
     private var plainStartAt: Long? = null
     private val resolvedScreens = mutableSetOf<Int>()
@@ -30,8 +33,15 @@ class NavigationSession(val goal: String, private val names: List<String>) {
     fun beforeDispatch(view: ScreenView?) { initialSignature = view?.signature; dispatched = true }
 
     private fun matches(label: String): Boolean = names.any { name ->
+        val wanted = GoalText.normalize(name)
         Regex("(?:^|[\\s:：])${Regex.escape(name)}(?:$|[\\s,()])", RegexOption.IGNORE_CASE).containsMatchIn(label) ||
-            GoalText.normalize(label) == GoalText.normalize(name)
+            GoalText.normalize(label) == wanted ||
+            // "수원 집" spoken, "수원집 경기도 수원시 …" listed: the first words without spaces name the place.
+            label.trim().split(Regex("\\s+")).let { words -> (1..minOf(3, words.size)).any { k -> GoalText.normalize(words.take(k).joinToString("")) == wanted } } ||
+            // The route screen's carousel cuts long names: "수요모…" for 수요모임.
+            Regex("^(.{2,})(?:…|\\.\\.\\.)$").matchEntire(label.trim())?.groupValues?.get(1)?.let { prefix ->
+                GoalText.normalize(prefix).let { it.length >= 2 && wanted.startsWith(it) }
+            } == true
     }
 
     fun isStart(label: String) = Regex("^(?:길|경로)?안내시작(?:하기|버튼|[0-9초후자동]*)?$")
@@ -100,6 +110,14 @@ class NavigationSession(val goal: String, private val names: List<String>) {
             val target = hits.filter { e -> names.any { GoalText.normalize(e.label) == GoalText.normalize(it) } }.singleOrNull()
                 ?: hits.singleOrNull()
             if (target != null) return Harness.Auto(AgentAction.Click(target.id), "현재 지도에서 요청한 목적지 항목이 하나로 확인됨")
+            // The frequent places carousel (집, 회사, 수요모…, 일요모…) shows four at a time: page through it.
+            if (hits.isEmpty() && !targetPicked) view.lists.firstOrNull { Regex("frequent", RegexOption.IGNORE_CASE).containsMatchIn(it.label) }?.let { carousel ->
+                if (carouselSignature == view.signature) carouselEnd = true // the last scroll moved nothing
+                if (!carouselEnd && carouselScrolls < 5) {
+                    carouselScrolls++; carouselSignature = view.signature
+                    return Harness.Auto(AgentAction.Scroll(ScrollDir.RIGHT, carousel.id), "자주 가는 곳 목록을 넘겨 '${names.first()}' 찾기")
+                }
+            }
             // NAVER's home/work and frequent destinations live in route selection, not only Favorites.
             if (hits.isEmpty() && !targetPicked) view.elements.singleOrNull {
                 it.enabled && it.kind != Kind.TEXT && GoalText.normalize(it.label) == "길찾기"

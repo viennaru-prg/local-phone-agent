@@ -128,17 +128,26 @@ class AgentAccessibilityService : AccessibilityService() {
         val windowId = windowOf[snapshot] ?: return null
         if (android.os.Build.VERSION.SDK_INT >= 33) clearCache()
         val root = windows.firstOrNull { it.id == windowId }?.root ?: return null
-        var current: AccessibilityNodeInfo = root
+        fun same(n: AccessibilityNodeInfo) = n.className?.toString().orEmpty() == expected.className &&
+            n.text?.toString().orEmpty() == expected.text && n.contentDescription?.toString().orEmpty() == expected.desc
+        var current: AccessibilityNodeInfo? = root
         for (part in expected.path.split('.').drop(1)) {
-            val next = runCatching { current.getChild(part.toInt()) }.getOrNull()
-            if (current !== root) current.recycleCompat()
-            current = next ?: return null
+            current = runCatching { current?.getChild(part.toInt()) }.getOrNull()
+            if (current == null) break
         }
-        val same = current.className?.toString().orEmpty() == expected.className &&
-            current.text?.toString().orEmpty() == expected.text &&
-            current.contentDescription?.toString().orEmpty() == expected.desc
-        if (!same) { current.recycleCompat(); return null }
-        return current
+        current?.takeIf(::same)?.let { return it }
+        // The tree shifted between observing and acting (a driving map redraws lane views, a player
+        // updates its status line). An unlabeled node cannot be re-identified; a labeled one that is
+        // the only exact match in the same window is the same control.
+        if (expected.text.isBlank() && expected.desc.isBlank()) return null
+        val found = mutableListOf<AccessibilityNodeInfo>()
+        val queue = ArrayDeque(listOf(root)); var seen = 0
+        while (queue.isNotEmpty() && seen < 800 && found.size < 2) {
+            val n = queue.removeFirst(); seen++
+            if (same(n)) found += n
+            for (i in 0 until n.childCount) runCatching { n.getChild(i) }.getOrNull()?.let(queue::addLast)
+        }
+        return found.singleOrNull()
     }
 
     // ---------- actions ----------

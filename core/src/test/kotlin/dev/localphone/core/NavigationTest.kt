@@ -50,6 +50,20 @@ class NavigationTest {
         assertEquals(AgentAction.Click(1), s.nextAction(map, 0)?.action)
     }
 
+    @Test fun endGuidanceOpensTheDrawerPressesEndAndConfirmsTheDrivingScreenIsGone() {
+        fun items(v: ScreenView) = v.copy(elements = v.elements.map { e -> e.copy(kind = Kind.ITEM) })
+        val goal = "길안내 종료해줘"
+        assertTrue(Harness.isEndGuidance(goal)); assertFalse(Harness.isEndGuidance("회사로 안내해줘"))
+        val driving = items(navView("고매로20번길", "경로 다시 계산 (v reroute)", "메뉴·옵션 열기 (v drawer)"))
+        assertEquals(AgentAction.Click(3), Harness.preDecide(goal, driving)?.action)
+        val drawer = items(navView("다른 경로", "안내 종료", "경로 다시 계산 (v reroute)", "메뉴·옵션 열기 (v drawer)"))
+        val opened = listOf(HistoryLine("click \"메뉴·옵션 열기 (v drawer)\"", "화면 바뀜"))
+        assertEquals(AgentAction.Click(2), Harness.preDecide(goal, drawer, opened)?.action)
+        val ended = opened + HistoryLine("click \"안내 종료\"", "화면 바뀜")
+        assertTrue(Harness.guidanceEnded(goal, items(navView("길찾기", "검색", "음식점", "카페", "편의점")), ended))
+        assertFalse(Harness.guidanceEnded(goal, driving, opened))
+    }
+
     @Test fun theRouteThisCommandStartedIsNeverEnded() {
         fun items(v: ScreenView) = v.copy(elements = v.elements.map { e -> e.copy(kind = Kind.ITEM) })
         val s = session()

@@ -22,7 +22,12 @@ object ActionGrounding {
                 node.className == raw.className && node.viewId == raw.viewId && node.ownLabel == raw.ownLabel &&
                 (raw.viewId.isNotBlank() || node.path == raw.path)
         }
-        val target = matches.singleOrNull() ?: return null
+        // A driving map redraws lane and distance views all the time, shifting tree paths of controls
+        // that did not change. A label that is unique on both screens still names the same control.
+        val target = matches.singleOrNull() ?: live.elements.filter { candidate ->
+            candidate.kind == expected.kind && candidate.label == expected.label && candidate.enabled &&
+                live.snapshot.nodes[candidate.node].className == raw.className && expected.label.isNotBlank()
+        }.singleOrNull()?.takeIf { action !is AgentAction.Type && before.elements.count { it.label == expected.label } == 1 } ?: return null
         return when (action) {
             is AgentAction.Click -> action.copy(id = target.id)
             is AgentAction.LongClick -> action.copy(id = target.id)

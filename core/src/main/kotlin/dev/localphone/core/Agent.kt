@@ -107,6 +107,7 @@ class Agent(
     private suspend fun verify(goal: String, run: Run, view: ScreenView, answer: String = ""): Verdict {
         mediaEvidence(goal, run)?.let { return Verdict(true, it) }
         playlistEvidence(goal, run, view)?.let { return Verdict(true, it) }
+        if (Harness.guidanceEnded(goal, view, run.history)) return Verdict(true, "길안내를 종료했어요.")
         if (Router.simpleMediaKey(goal) != null && phone.musicActive() != null) return Verdict(false, "음악 상태가 아직 요청과 다름")
         navigation?.let {
             val evidence = it.observe(view)
@@ -233,6 +234,11 @@ class Agent(
                 return finish(run, goal, "")
             }
             // Hard evidence for music and app goals: the system audio state / the app in front.
+            if (Harness.guidanceEnded(goal, view, run.history) || Harness.noGuidance(goal, view, run.history)) {
+                val ended = Harness.guidanceEnded(goal, view, run.history)
+                listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "주행 화면 제어가 사라짐", 0, phone.now() - started))
+                return finish(run, goal, if (ended) "길안내를 종료했어요." else "지금은 길안내 중이 아니에요.")
+            }
             playlistEvidence(goal, run, view)?.let { say ->
                 listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "재생목록 변경(추가·삭제) 확인", 0, phone.now() - started))
                 return finish(run, goal, say)
@@ -407,7 +413,7 @@ class Agent(
         // disappeared control and changed screen are the postcondition; a second planner must not
         // start exploring the normal screen again. Compound goals still use whole-goal verification.
         if(CompletionGrounding.completedTermination(goal,action,view,next)) {
-            val reason="진행 중인 작업을 종료했어요."
+            val reason = if (Harness.isEndGuidance(goal)) "길안내를 종료했어요." else "진행 중인 작업을 종료했어요."
             run.history += HistoryLine("완료 확인","목표 달성","실제 종료 동작 후 화면 변경·종료 제어 부재 확인")
             listener.step(StepRecord(index,"harness_verify",next.render(),"","verify","완료",reason,0,phone.now()-started))
             return finish(run,goal,reason)

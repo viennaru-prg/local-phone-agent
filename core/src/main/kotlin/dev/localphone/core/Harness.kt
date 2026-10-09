@@ -23,6 +23,7 @@ object Harness {
         mediaControl(goal, view, history)?.let { return it }
         playlistAdd(goal, view, history)?.let { return it }
         playlistRemove(goal, view, history)?.let { return it }
+        endGuidance(goal, view, history)?.let { return it }
         if (!ShortcutGoals.allowsUiHeuristics(goal)) return null
         resumePrompt(goal, view)?.let { return it }
         unrelatedSheet(goal, view, history)?.let { return it }
@@ -136,6 +137,43 @@ object Harness {
      * button, then press the add button on the result row that names the song. The small model kept
      * pressing "재생목록 만들기" instead; these steps are the same in every player with a search box.
      */
+    private val endGuidanceLabel = Regex("^(?:길|경로)?안내\\s*종료$")
+    private val drivingControls = Regex("경로\\s*다시\\s*계산|reroute|(?:길|경로)?안내\\s*종료")
+
+    /** "길안내 종료해줘", "안내 그만해", "내비 꺼줘". */
+    fun isEndGuidance(goal: String): Boolean =
+        Regex("(?:길\\s*안내|안내|내비(?:게이션)?|경로\\s*안내).{0,4}(?:종료|그만|꺼|끝내|멈춰|중지)").containsMatchIn(goal)
+
+    /** NAVER Map is in front without any driving controls and nothing was pressed: there is no guidance to end. */
+    fun noGuidance(goal: String, view: ScreenView, history: List<HistoryLine>): Boolean =
+        isEndGuidance(goal) && view.snapshot.packageName == NavigationSession.NAVER_MAP && view.elements.size >= 5 &&
+            view.elements.none { drivingControls.containsMatchIn(it.label) } && history.none { it.action.startsWith("click") }
+
+    /** Guidance was ended: 안내 종료 was pressed and the driving controls are gone. */
+    fun guidanceEnded(goal: String, view: ScreenView, history: List<HistoryLine>): Boolean =
+        isEndGuidance(goal) && history.any { h -> h.action.startsWith("click") && endGuidanceLabel.matches(Regex("\"(.*)\"").find(h.action)?.groupValues?.get(1)?.trim().orEmpty()) &&
+            h.outcome.contains("바뀜") } && view.elements.none { drivingControls.containsMatchIn(it.label) }
+
+    /** NAVER keeps 안내 종료 in the driving screen's drawer: open it, then press 안내 종료 (and its confirmation). */
+    private fun endGuidance(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
+        if (!isEndGuidance(goal)) return null
+        val pressed = history.count { it.action.startsWith("click") && it.action.contains("종료") }
+        if (view.snapshot.packageName != NavigationSession.NAVER_MAP && pressed == 0 && history.none { it.action.startsWith("open_app") })
+            return Auto(AgentAction.OpenApp("네이버 지도"), "길안내는 네이버 지도에서 종료")
+        if (view.snapshot.home) return null
+        if (pressed >= 3) return null
+        view.elements.firstOrNull { it.enabled && it.kind != Kind.TEXT && endGuidanceLabel.matches(it.label.trim()) }?.let {
+            return Auto(AgentAction.Click(it.id), "안내 종료")
+        }
+        if (pressed > 0) view.elements.firstOrNull { it.enabled && it.kind != Kind.TEXT && Regex("^(?:종료|확인)$").matches(it.label.trim()) }?.let {
+            return Auto(AgentAction.Click(it.id), "안내 종료 확인")
+        }
+        if (view.elements.none { drivingControls.containsMatchIn(it.label) }) return null
+        if (history.takeLast(2).count { it.action.contains("drawer") || it.action.contains("메뉴") } >= 2) return null
+        return view.elements.firstOrNull { it.enabled && it.kind != Kind.TEXT && Regex("메뉴.*옵션|drawer", RegexOption.IGNORE_CASE).containsMatchIn(it.label) }
+            ?.let { Auto(AgentAction.Click(it.id), "안내 종료가 있는 메뉴 열기") }
+    }
+
     /** The playlist row whose end (delete) icon was tapped for [query], if the tap changed the screen. */
     fun removedRow(query: String, history: List<HistoryLine>): String? = history.asReversed().firstNotNullOfOrNull { h ->
         val label = Regex("^click_end \"(.*)\"$").matchEntire(h.action)?.groupValues?.get(1) ?: return@firstNotNullOfOrNull null

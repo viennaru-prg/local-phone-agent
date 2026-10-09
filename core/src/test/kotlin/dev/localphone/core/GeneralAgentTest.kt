@@ -109,6 +109,9 @@ class GeneralAgentTest {
             assertTrue(Router.allowsMedia(goal), "the screen agent may perform the explicitly requested music part")
         }
         assertFalse(Router.allowsMedia("네비 꺼줘"))
+        assertFalse(Router.allowsMedia("타이머 멈춰줘"), "a generic stop verb must not force a music key")
+        assertFalse(Router.allowsMedia("다음 알람을 보여줘"))
+        assertTrue(Router.allowsMedia("음악 멈춰줘"))
     }
 
     @Test fun aDecisionSurvivesUnrelatedDynamicRowsButBindsToTheLiveMenuId() {
@@ -161,5 +164,30 @@ class GeneralAgentTest {
         override suspend fun openApp(name: String) = OpenAppResult(false, "")
         override suspend fun media(key: MediaKey) = false
         override fun now() = 0L
+    }
+
+    @Test fun aTerminationActionChecksCompletionBeforeAnyFurtherExploration() = runTest {
+        var stopped = false
+        var decisions = 0
+        var verifications = 0
+        val phone = object : Phone {
+            override suspend fun observe() = if (!stopped) screen("임의 앱", button("끝내기"))
+                else screen("임의 앱", RawNode("r.0", 0, text = "일반 화면", bounds = Bounds(0, 100, 1000, 200)))
+            override suspend fun perform(view: ScreenView, action: AgentAction): Boolean { stopped = true; return true }
+            override suspend fun openApp(name: String) = OpenAppResult(false, "없음")
+            override suspend fun media(key: MediaKey) = false
+            override fun now() = testScheduler.currentTime
+        }
+        val model = object : LanguageModel {
+            override suspend fun decide(prompt: ModelPrompt, grammar: String): String {
+                if (prompt.user.contains("완료 확인")) { verifications++; assertTrue(stopped); return """{"ok":true,"reason":"진행 중인 작업을 종료했어요"}""" }
+                decisions++
+                return """{"action":"click","id":1}"""
+            }
+        }
+        val result = Agent(model, phone, RecipeBook({null}, {}), {emptyList()}).run("현재 작업을 꺼줘")
+        assertEquals(Outcome.DONE, result.outcome)
+        assertEquals(1, decisions, "Do not keep looking for an exit after the task was stopped")
+        assertEquals(1, verifications)
     }
 }

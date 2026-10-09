@@ -63,7 +63,7 @@ class Agent(
     private val listener: AgentListener = object : AgentListener {},
     private val navigation: NavigationSession? = null,
 ) {
-    private class Run(val goal: String) {
+    private class Run(val goal: String, val started: Long) {
         val history = mutableListOf<HistoryLine>()
         val learned = mutableListOf<RecipeStep>()
         var noChange = 0
@@ -87,11 +87,15 @@ class Agent(
         if (!Harness.searchShown(goal, view)) return Verdict(false, "검색어가 화면에 아직 없음")
         if (!Harness.screenShown(goal, view)) return Verdict(false, "요청한 화면의 이름이 보이지 않음")
         listener.progress("전체 목표 완료 여부 확인 중…")
+        val started = phone.now()
         val raw = model.decide(Prompts.verify(goal, notes(), run.history, view, config.withNote), Prompts.VERIFY_GRAMMAR)
         val json = runCatching { com.google.gson.JsonParser.parseString(raw).asJsonObject }.getOrNull()
             ?: return Verdict(false, "확인 응답 형식 오류")
         val text = json.get("reason")?.asString.orEmpty().trim()
-        return if (json.get("ok")?.asBoolean == true) Verdict(true, text) else Verdict(false, text.ifBlank { "목표와 다름" })
+        val verdict = if (json.get("ok")?.asBoolean == true) Verdict(true, text) else Verdict(false, text.ifBlank { "목표와 다름" })
+        listener.step(StepRecord(run.history.size, "model_verify", view.render(), raw, "verify",
+            if (verdict.ok) "목표 완료 확인됨" else "검증 실패", verdict.text, phone.now() - started, phone.now() - run.started))
+        return verdict
     }
 
     private fun finish(run: Run, goal: String, modelSay: String): AgentResult {
@@ -102,11 +106,11 @@ class Agent(
     }
 
     suspend fun run(goal: String, previous: List<HistoryLine> = emptyList()): AgentResult {
-        val run = Run(goal)
+        val started = phone.now()
+        val run = Run(goal, started)
         run.history += previous
         if (previous.isEmpty() && GoalText.isChatter(goal))
             return AgentResult(Outcome.FAILED, "할 일을 알아듣지 못했어요. 다시 말씀해 주세요.", run.history)
-        val started = phone.now()
         var view = observe() ?: return fail(run, "화면을 읽을 수 없습니다. 접근성 서비스가 켜져 있는지 확인해 주세요.")
         navigation?.observe(view)
 
@@ -479,7 +483,7 @@ class Agent(
  */
 object Commit {
     // English words only as whole words, and no "play": "Google Play 검색" is not a play button.
-    private val words = Regex("시작|완료|적용|등록|담기|추가|재생|전송|\\bstart\\b|\\bdone\\b", RegexOption.IGNORE_CASE)
+    private val words = Regex("시작|완료|종료|끝내|중지|닫기|적용|등록|담기|추가|재생|전송|\\bstart\\b|\\bdone\\b|\\bstop\\b|\\bexit\\b|\\bclose\\b", RegexOption.IGNORE_CASE)
     fun isCommit(label: String) = label.length <= 20 && words.containsMatchIn(label)
 }
 

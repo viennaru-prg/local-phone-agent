@@ -88,7 +88,8 @@ object Router {
     fun allowsMedia(goal: String): Boolean = (!navVerb.containsMatchIn(goal) ||
         (GoalScope.multiple(goal) && Regex("음악|노래|곡").containsMatchIn(goal))) &&
         GoalText.searchQuery(goal) == null && GoalText.namedApp(goal) == null &&
-        Regex("음악|노래|곡|재생|멈춰|일시\\s*정지|다음|이전").containsMatchIn(goal)
+        (Regex("음악|노래|곡").containsMatchIn(goal) ||
+            Regex("^(?:재생|일시정지)(?:해줘|해주세요|해|줘)?$").matches(GoalText.normalize(goal)))
 
     /** Short classification prompt for everything else. Place names are offered as a closed list. */
     fun prompt(goal: String, places: List<Place>): ModelPrompt {

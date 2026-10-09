@@ -149,12 +149,25 @@ char ::= [^"\\\x00-\x1F] | "\\" ["\\/bfnrt]
                     .takeLast(8).forEach { append("- ").append(it.action.take(100)).append(" → ").append(it.outcome.take(80)).append('\n') }
             }
             shown.forEachIndexed { i, h ->
-                append(history.size - shown.size + i + 1).append(". ").append(h.action).append(" → ").append(h.outcome)
-                if (h.note.isNotBlank()) append(" (").append(h.note).append(')')
+                append(history.size - shown.size + i + 1).append(". ").append(h.action.take(120)).append(" → ").append(h.outcome.take(80))
+                if (h.note.isNotBlank()) append(" (").append(h.note.take(80)).append(')')
                 append('\n')
             }
-            append("현재 화면:\n").append(view.render(GoalText.targetWords(goal), recentlyClicked(history)))
+            append("현재 화면:\n").append(fit(view.render(GoalText.targetWords(goal), recentlyClicked(history))))
         }
+
+    /** Characters of screen the model sees. ClipStream's results plus playlist overflowed the 3072-token context. */
+    const val MAX_SCREEN_CHARS = 2200
+
+    /** Drops plain text lines first, then cuts the tail, so a crowded screen still fits the context. */
+    fun fit(screen: String): String {
+        if (screen.length <= MAX_SCREEN_CHARS) return screen
+        val lines = screen.lines()
+        val kept = lines.filterIndexed { i, line -> i == 0 || !Regex("^\\[\\d+] 텍스트 ").containsMatchIn(line) }
+        val joined = kept.joinToString("\n")
+        if (joined.length <= MAX_SCREEN_CHARS) return joined + "\n(글자만 있는 줄은 생략)"
+        return joined.take(MAX_SCREEN_CHARS).substringBeforeLast('\n') + "\n(화면이 길어 이하 생략. scroll로 더 볼 수 있음)"
+    }
 
     /** Labels pressed in the last two steps, e.g. `click "회사"` → 회사. */
     fun recentlyClicked(history: List<HistoryLine>): Set<String> = history.takeLast(2).mapNotNull {

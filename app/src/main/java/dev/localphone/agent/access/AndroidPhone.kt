@@ -32,6 +32,7 @@ class AndroidPhone(private val context: Context) : Phone {
             is AgentAction.Scroll -> s.scroll(snap, action.id?.let(::node) ?: view.lists.maxByOrNull { it.bounds.height * it.bounds.width }?.node, action.dir)
             AgentAction.Back -> s.back()
             is AgentAction.TapEnd -> node(action.id)?.let { s.tapObserved(snap, it, trailing = true) } ?: false
+            is AgentAction.DoubleTap -> node(action.id)?.let { s.tapObserved(snap, it) && run { delay(120); s.tapObserved(snap, it) } } ?: false
             else -> false
         }
     }
@@ -100,8 +101,7 @@ class AndroidPhone(private val context: Context) : Phone {
             return null
         }
         val (view, icon) = found
-        if (!perform(view, AgentAction.Click(icon.id))) return null
-        val opened = withTimeoutOrNull(4500) {
+        suspend fun appeared(ms: Long) = withTimeoutOrNull(ms) {
             while (true) {
                 val now = observe()
                 if (now != null && now.packageName != folder.packageName && matches(now.appLabel)) return@withTimeoutOrNull true
@@ -109,6 +109,14 @@ class AndroidPhone(private val context: Context) : Phone {
             }
             @Suppress("UNREACHABLE_CODE") false
         } == true
+        if (!perform(view, AgentAction.Click(icon.id))) return null
+        var opened = appeared(2500)
+        if (!opened) {
+            // The launcher sometimes accepts the accessibility click without opening the app: tap the icon for real.
+            val again = observe()?.let(ScreenCompactor::compact)?.takeIf { it.snapshot.packageName == folder.packageName }
+            again?.elements?.firstOrNull { it.enabled && matches(it.label) }?.let { tap(again, it.id) }
+            opened = appeared(3500)
+        }
         android.util.Log.i("AgentTools", "secure folder open '$name' via '${icon.label}' opened=$opened")
         return if (opened) OpenAppResult(true, "열림: ${icon.label} (보안 폴더)") else null
     }

@@ -54,6 +54,8 @@ class AgentConfig(
     val unlockWaitMs: Long = 45_000,
     /** Ask the model for a short reasoning note before each action (slower, sometimes more accurate). */
     val withNote: Boolean = true,
+    /** The player used for "<곡> 틀어줘" when the command names no app (the user's ClipStream in Secure Folder). */
+    val musicApp: String = "클립스트림",
 )
 
 /**
@@ -107,6 +109,7 @@ class Agent(
     private suspend fun verify(goal: String, run: Run, view: ScreenView, answer: String = ""): Verdict {
         mediaEvidence(goal, run)?.let { return Verdict(true, it) }
         playlistEvidence(goal, run, view)?.let { return Verdict(true, it) }
+        GoalText.playSong(goal)?.let { q -> if (Harness.nowPlaying(q, view) && phone.musicActive() != false) return Verdict(true, "$q 노래를 틀었어요.") }
         if (Harness.guidanceEnded(goal, view, run.history)) return Verdict(true, "길안내를 종료했어요.")
         if (Router.mediaKeyIn(goal) != null && phone.musicActive() != null) return Verdict(false, "음악 상태가 아직 요청과 다름")
         navigation?.let {
@@ -217,6 +220,12 @@ class Agent(
                 view = next
             } else run.history += HistoryLine("open_app \"$app\"", "이미 요청한 앱이 전면에 있음")
         }
+        // "늙은 사랑 틀어줘" names no app: songs are played in the user's player.
+        if (GoalText.playSong(goal) != null && GoalText.namedApp(goal) == null && !Harness.isPlayer(view) && !appInFront(view, config.musicApp)) {
+            val (outcome, next) = execute(run, AgentAction.OpenApp(config.musicApp), view)
+            listener.step(StepRecord(0, "android_api", "", "", "open_app \"${config.musicApp}\"", outcome, "곡 재생은 음악 앱에서", 0, phone.now() - started))
+            view = next
+        }
 
         if (previous.isEmpty()) recipes.find(goal)?.let { recipe ->
             listener.progress("기억한 방법으로 실행 중…")
@@ -240,6 +249,10 @@ class Agent(
                 val ended = Harness.guidanceEnded(goal, view, run.history)
                 listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "주행 화면 제어가 사라짐", 0, phone.now() - started))
                 return finish(run, goal, if (ended) "길안내를 종료했어요." else "지금은 길안내 중이 아니에요.")
+            }
+            GoalText.playSong(goal)?.takeIf { q -> Harness.nowPlaying(q, view) && phone.musicActive() != false }?.let { q ->
+                listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "재생 막대의 곡 제목과 재생 상태 확인", 0, phone.now() - started))
+                return finish(run, goal, "$q 노래를 틀었어요.")
             }
             playlistEvidence(goal, run, view)?.let { say ->
                 listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "재생목록 변경(추가·삭제) 확인", 0, phone.now() - started))
@@ -412,7 +425,7 @@ class Agent(
         }
         if (!finishing) return null
         // The harness already knows the next step (search pressed → add the result): no verifier call.
-        if (Harness.preDecide(goal, next, run.history) != null && (GoalText.playlistAdd(goal) ?: GoalText.playlistRemove(goal)) != null) return null
+        if (Harness.preDecide(goal, next, run.history) != null && (GoalText.playlistAdd(goal) ?: GoalText.playlistRemove(goal) ?: GoalText.playSong(goal)) != null) return null
         // For an atomic termination the model selected the terminating operation. Its actual
         // disappeared control and changed screen are the postcondition; a second planner must not
         // start exploring the normal screen again. Compound goals still use whole-goal verification.
@@ -705,6 +718,13 @@ object Guard {
         // An app's "새 버전 1.1.108을 설치할 수 있습니다" banner led into the unknown-sources settings.
         if (install.containsMatchIn(label) && !install.containsMatchIn(goal)) return "목표에 없는 설치·업데이트라 누르지 않음"
         // Deleting is allowed only when the user asked to remove something ("빼줘", "삭제해줘", ...).
+        // Adding: only a result that names the requested song (the model once added a stale result).
+        (GoalText.playlistAdd(goal) ?: GoalText.playSong(goal))?.let { query ->
+            val row = label.substringAfter(" · ", "")
+            if (row.isNotEmpty() && Regex("추가|담기|add", RegexOption.IGNORE_CASE).containsMatchIn(label.substringBefore(" · ")) &&
+                !GoalText.rowMatches(query, row))
+                return "요청한 곡이 아닌 결과라 추가하지 않음"
+        }
         // "아이유 좋은날 재생목록에서 빼줘" removes one song; "재생목록 삭제" would delete the whole playlist.
         if (Regex("(?:재생\\s*목록|플레이\\s*리스트|목록)\\s*(?:삭제|지우기|제거)|전체\\s*삭제|모두\\s*지우기").containsMatchIn(label) &&
             !Regex("(?:재생\\s*목록|플레이\\s*리스트)\\s*(?:을|를)?\\s*(?:삭제|지워|없애)").containsMatchIn(goal))

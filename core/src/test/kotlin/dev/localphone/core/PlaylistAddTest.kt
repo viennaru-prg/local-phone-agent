@@ -12,6 +12,8 @@ private class FakeClipStream(private val scope: TestScope) : Phone {
     var results = false
     val playlist = mutableListOf("Woody - 어제보다 슬픈 오늘", "더 크로스 - 당신을 위하여")
     var created = 0
+    var nowPlaying = "Woody - 어제보다 슬픈 오늘"
+    var playing = false
     private val rows = listOf("IU 좋은 날 라이브 무대", "아이유(IU) - 좋은 날 [가사/Lyrics]", "Good day (inst)")
     override suspend fun observe(): Snapshot {
         val n = mutableListOf(
@@ -29,6 +31,11 @@ private class FakeClipStream(private val scope: TestScope) : Phone {
             n += RawNode("r.0.2.$i.b", 4, desc = "현재 재생목록에 추가", clickable = true, className = "android.widget.Button", bounds = Bounds(880, top - 20, 1000, top + 100))
         }
         playlist.forEachIndexed { i, t -> n += RawNode("r.0.5.$i", 1, text = t, clickable = true, className = "android.widget.Button", bounds = Bounds(100, 1300 + i * 150, 900, 1420 + i * 150)) }
+        // Mini player bar at the bottom.
+        n += RawNode("r.1", 0, text = nowPlaying, bounds = Bounds(200, 2060, 600, 2120))
+        n += RawNode("r.2", 0, desc = "이전 곡", clickable = true, className = "android.widget.Button", bounds = Bounds(620, 2050, 720, 2170))
+        n += RawNode("r.3", 0, desc = if (playing) "일시정지" else "재생", clickable = true, className = "android.widget.Button", bounds = Bounds(730, 2050, 860, 2170))
+        n += RawNode("r.4", 0, desc = "Next track", clickable = true, className = "android.widget.Button", bounds = Bounds(870, 2050, 980, 2170))
         return Snapshot("local.clipstream.player", "Clipstream Player", n, 1080, 2340)
     }
     override suspend fun perform(view: ScreenView, action: AgentAction): Boolean {
@@ -40,14 +47,20 @@ private class FakeClipStream(private val scope: TestScope) : Phone {
                     label == "검색" -> results = true
                     label.startsWith("현재 재생목록에 추가 · ") -> playlist += label.substringAfter(" · ")
                     label == "재생목록 만들기" -> created++
+
+                    label == "재생" -> playing = true
+                    label == "일시정지" -> playing = false
                 }
             }
             is AgentAction.TapEnd -> playlist.remove(view.element(action.id)?.label)
+            // Like ClipStream: a single tap only selects a playlist row; tapping it again plays it.
+            is AgentAction.DoubleTap -> view.element(action.id)?.label?.takeIf { it in playlist }?.let { nowPlaying = it; playing = true }
             else -> {}
         }
         return true
     }
     override suspend fun openApp(name: String) = OpenAppResult(true, "이미 열려 있음")
+    override fun musicActive() = playing
     override suspend fun media(key: MediaKey) = false
     override fun now() = scope.testScheduler.currentTime
 }
@@ -75,6 +88,53 @@ class PlaylistAddTest {
         assertEquals(4, phone.playlist.size, log)
         assertEquals(phone.playlist.drop(2).distinct().size, 2, log)
         assertEquals("좋은 날 노래 2곡을 재생목록에 추가했어요.", result.say, log)
+    }
+
+    @Test fun aSongInThePlaylistIsPlayedByItsRow() = runTest {
+        assertEquals("더 크로스", GoalText.playSong("더 크로스 틀어줘"))
+        assertEquals("길을 잃은 용사를 위한", GoalText.playSong("길을 잃은 용사를 위한 노래 틀어 줘"))
+        assertEquals("늙은 사랑", GoalText.playSong("클립스트림에서 늙은 사랑 틀어줘"))
+        assertEquals(null, GoalText.playSong("음악 틀어줘"))
+        assertEquals(null, GoalText.playSong("다음 곡 틀어줘"))
+        val phone = FakeClipStream(this)
+        val calls = mutableListOf<String>()
+        val model = object : LanguageModel {
+            override suspend fun decide(prompt: ModelPrompt, grammar: String): String { calls += prompt.system; return """{"action":"back","check":false}""" }
+        }
+        val result = Agent(model, phone, RecipeBook({ null }, {}), { emptyList() }, AgentConfig(withNote = false)).run("더 크로스 틀어줘")
+        val log = result.history.joinToString("\n")
+        assertEquals(Outcome.DONE, result.outcome, log)
+        assertEquals("더 크로스 - 당신을 위하여", phone.nowPlaying, log)
+        assertTrue(phone.playing, log)
+        assertTrue(calls.isEmpty(), "no model call: $calls\n$log")
+    }
+
+    @Test fun staleResultsOfAnotherSearchAreNeverAdded() = runTest {
+        val phone = FakeClipStream(this).apply { query = "김명기 say yes"; results = true }
+        val model = object : LanguageModel {
+            // The failure seen on the phone: the model pressed + on a result of the previous search.
+            override suspend fun decide(prompt: ModelPrompt, grammar: String): String {
+                val id = Regex("\\[(\\d+)] \\S+ \"현재 재생목록에 추가").find(prompt.user)?.groupValues?.get(1)
+                return if (id != null) """{"action":"click","id":$id,"check":false}""" else """{"action":"back","check":false}"""
+            }
+        }
+        val result = Agent(model, phone, RecipeBook({ null }, {}), { emptyList() }, AgentConfig(withNote = false)).run("아이유 드라마 재생목록에 추가해줘")
+        val log = result.history.joinToString("\n")
+        assertEquals(2, phone.playlist.size, log)
+        assertTrue(result.history.any { it.action == "click \"검색\"" }, "the new query was searched\n$log")
+    }
+
+    @Test fun aSongNotInThePlaylistIsAddedThenPlayed() = runTest {
+        val phone = FakeClipStream(this)
+        val model = object : LanguageModel {
+            override suspend fun decide(prompt: ModelPrompt, grammar: String) = """{"action":"back","check":false}"""
+        }
+        val result = Agent(model, phone, RecipeBook({ null }, {}), { emptyList() }, AgentConfig(withNote = false)).run("아이유 좋은 날 틀어줘")
+        val log = result.history.joinToString("\n")
+        assertEquals(Outcome.DONE, result.outcome, log)
+        assertEquals("아이유(IU) - 좋은 날 [가사/Lyrics]", phone.nowPlaying, log)
+        assertTrue(phone.playing, log)
+        assertEquals(3, phone.playlist.size, log)
     }
 
     @Test fun removeGoalsNameTheSong() {

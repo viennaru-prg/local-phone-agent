@@ -25,6 +25,7 @@ object Harness {
         mediaControl(goal, view, history)?.let { return it }
         playlistAdd(goal, view, history)?.let { return it }
         playlistRemove(goal, view, history)?.let { return it }
+        playSong(goal, view, history)?.let { return it }
         endGuidance(goal, view, history)?.let { return it }
         if (!ShortcutGoals.allowsUiHeuristics(goal)) return null
         resumePrompt(goal, view)?.let { return it }
@@ -134,7 +135,7 @@ object Harness {
         val label = Regex("^click \"(.*)\"$").matchEntire(h.action)?.groupValues?.get(1) ?: return@mapNotNull null
         val row = label.substringAfter(" · ", "")
         row.takeIf { addLabel.containsMatchIn(label.substringBefore(" · ")) && it.isNotEmpty() && h.outcome.contains("바뀜") &&
-            GoalText.rowScore(query, it) * 2 >= query.trim().split(Regex("\\s+")).size }
+            GoalText.rowMatches(query, it) }
     }.distinct()
 
     /**
@@ -182,7 +183,7 @@ object Harness {
     /** The playlist row whose end (delete) icon was tapped for [query], if the tap changed the screen. */
     fun removedRow(query: String, history: List<HistoryLine>): String? = history.asReversed().firstNotNullOfOrNull { h ->
         val label = Regex("^click_end \"(.*)\"$").matchEntire(h.action)?.groupValues?.get(1) ?: return@firstNotNullOfOrNull null
-        label.takeIf { h.outcome.contains("바뀜") && GoalText.rowScore(query, it) * 2 >= query.trim().split(Regex("\\s+")).size }
+        label.takeIf { h.outcome.contains("바뀜") && GoalText.rowMatches(query, it) }
     }
 
     /**
@@ -202,7 +203,7 @@ object Harness {
             row.bounds.centerX in l.bounds.left..l.bounds.right }.minByOrNull(::area)
         val scrolls = history.count { it.action.startsWith("scroll") }
         val stuck = history.lastOrNull()?.let { it.action.startsWith("scroll") && it.outcome.startsWith("변화 없음") } == true
-        rows.filter { GoalText.rowScore(query, it.label) * 2 >= wanted }.maxByOrNull { GoalText.rowScore(query, it.label) }?.let { row ->
+        rows.filter { GoalText.rowMatches(query, it.label) }.maxByOrNull { GoalText.rowScore(query, it.label) }?.let { row ->
             val list = box(row)
             // Half hidden under the mini player: the end of the row may be another control. Move it into view first.
             if (list != null && (row.bounds.top < list.bounds.top || row.bounds.bottom > list.bounds.bottom)) {
@@ -219,30 +220,106 @@ object Harness {
         return Auto(AgentAction.Scroll(ScrollDir.DOWN, list.id), "재생목록에서 '$query' 찾기")
     }
 
-    private fun playlistAdd(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
-        val query = GoalText.playlistAdd(goal) ?: return null
+    private fun playlistAdd(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? =
+        GoalText.playlistAdd(goal)?.let { addFlow(it, GoalText.playlistAddCount(goal), view, history) }
+
+    private fun isTrackRow(view: ScreenView, e: Element) = (e.kind == Kind.BUTTON || e.kind == Kind.ITEM) && e.enabled &&
+        !e.label.contains(" · ") && e.bounds.width * 2 >= view.snapshot.width && e.bounds.height >= 80
+
+    /** A music player screen: its previous/next and play/pause controls are on it. */
+    fun isPlayer(view: ScreenView): Boolean {
+        val labels = view.elements.filter { it.kind == Kind.BUTTON || it.kind == Kind.ITEM }.map { it.label.trim() }
+        return labels.any { prevLabel.matches(it) || nextLabel.matches(it) } && labels.any { playLabel.matches(it) || pauseLabel.matches(it) }
+    }
+
+    /**
+     * The player bar at the bottom names the song. Read from raw nodes: a crowded screen drops plain
+     * text from the compact view (70 elements). Search-result rows drawn behind the bar have an add
+     * button beside their title; the bar's title has none.
+     */
+    private fun barTitle(query: String, view: ScreenView): Boolean {
+        val nodes = view.snapshot.nodes
+        val bottom = view.snapshot.height * 0.86
+        return nodes.withIndex().any { (i, n) ->
+            n.bounds.top >= bottom && n.bounds.top < view.snapshot.height && !n.clickable && n.ownLabel.isNotBlank() &&
+                GoalText.rowMatches(query, n.ownLabel) &&
+                nodes.withIndex().none { (j, m) -> j != i && m.parent == n.parent && addLabel.containsMatchIn(m.ownLabel) }
+        }
+    }
+
+    /** The requested song is in the player bar and the pause control shows: it is playing. */
+    fun nowPlaying(query: String, view: ScreenView): Boolean =
+        barTitle(query, view) && view.elements.any { it.enabled && pauseLabel.matches(it.label.trim()) }
+
+    /**
+     * "늙은 사랑 틀어줘" in a player: tap the playlist row naming the song (scrolling its list down, then
+     * up); a song not in the playlist is searched and added first, then played from the playlist.
+     */
+    private fun playSong(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
+        val query = GoalText.playSong(goal) ?: return null
+        if (!isPlayer(view) || nowPlaying(query, view)) return null
+        // The player bar updates a moment after the row's second tap: wait for it instead of asking the model.
+        val lastTap = history.lastOrNull { it.action != "wait" }
+        if (lastTap != null && lastTap.action.startsWith("double_tap") && !lastTap.outcome.startsWith("실행 실패")) {
+            if (history.takeLast(3).count { it.action == "wait" } < 3) return Auto(AgentAction.Wait, "재생 막대가 바뀔 때까지 기다림")
+        }
+        // Selected but paused: press play.
+        if (barTitle(query, view)) view.elements.firstOrNull { it.enabled && playLabel.matches(it.label.trim()) }
+            ?.takeIf { b -> history.takeLast(2).none { it.action == "click \"${b.label}\"" } }
+            ?.let { return Auto(AgentAction.Click(it.id), "고른 곡이 멈춰 있어 재생") }
+        fun area(e: Element) = e.bounds.width.toLong() * e.bounds.height
+        fun box(row: Element) = view.lists.filter { l -> row.bounds.centerY in l.bounds.top..l.bounds.bottom &&
+            row.bounds.centerX in l.bounds.left..l.bounds.right }.minByOrNull(::area)
+        val rows = view.elements.filter { isTrackRow(view, it) }
+        // Scrolls since the last add: the added song lands at the end of the playlist.
+        val since = history.indexOfLast { h -> addLabel.containsMatchIn(h.action.substringBefore(" · ")) && h.action.startsWith("click") } + 1
+        val scrolls = history.drop(since).filter { it.action.startsWith("scroll") }
+        rows.filter { GoalText.rowMatches(query, it.label) }.maxByOrNull { GoalText.rowScore(query, it.label) }?.let { row ->
+            val list = box(row)
+            if (list != null && (row.bounds.top < list.bounds.top || row.bounds.bottom > list.bounds.bottom) && scrolls.size < 12)
+                return Auto(AgentAction.Scroll(if (row.bounds.centerY > list.bounds.centerY) ScrollDir.DOWN else ScrollDir.UP, list.id),
+                    "'${row.label.take(20)}' 줄이 잘려 보여 목록을 움직임")
+            if (history.count { it.action == "double_tap \"${row.label}\"" } >= 2) return null
+            return Auto(AgentAction.DoubleTap(row.id), "재생목록의 '${row.label.take(30)}' 재생 (첫 탭 선택, 두 번째 탭 재생)")
+        }
+        // Not on screen: look down the playlist, then up, then search and add it.
+        val list = rows.mapNotNull(::box).minByOrNull(::area)
+        val downDone = scrolls.any { it.action.startsWith("scroll down") && it.outcome.startsWith("변화 없음") }
+        val upDone = scrolls.any { it.action.startsWith("scroll up") && it.outcome.startsWith("변화 없음") }
+        if (list != null && scrolls.size < 12 && !(downDone && upDone))
+            return Auto(AgentAction.Scroll(if (downDone) ScrollDir.UP else ScrollDir.DOWN, list.id), "재생목록에서 '$query' 찾기")
+        if (addedRows(query, history).isNotEmpty()) return null
+        return addFlow(query, 1, view, history)
+    }
+
+    private fun addFlow(query: String, count: Int, view: ScreenView, history: List<HistoryLine>): Auto? {
         val added = addedRows(query, history)
-        if (view.snapshot.home || added.size >= GoalText.playlistAddCount(goal)) return null
-        val wanted = query.trim().split(Regex("\\s+")).size
+        if (view.snapshot.home || added.size >= count) return null
         val adds = view.elements.filter { (it.kind == Kind.BUTTON || it.kind == Kind.ITEM) && it.enabled && it.label.contains(" · ") &&
             addLabel.containsMatchIn(it.label.substringBefore(" · ")) }
-        if (adds.isNotEmpty()) {
-            // "아이유 노래 3곡": the best-matching rows not added yet, top of the results first.
-            val best = adds.filter { a -> a.label.substringAfter(" · ") !in added && history.none { it.action == "click \"${a.label}\"" } }
-                .sortedByDescending { GoalText.rowScore(query, it.label.substringAfter(" · ")) }.firstOrNull()
-            if (best != null && GoalText.rowScore(query, best.label.substringAfter(" · ")) * 2 >= wanted)
-                return Auto(AgentAction.Click(best.id), "검색 결과 '${best.label.substringAfter(" · ").take(30)}'를 재생목록에 추가")
-        }
-        if (added.isNotEmpty()) return null // fewer matching results than asked: keep what was added
         val q = GoalText.normalize(query)
         val inputs = view.inputs.filter { it.enabled }
         val field = inputs.firstOrNull { Regex("검색|search|찾기", RegexOption.IGNORE_CASE).containsMatchIn(it.label) }
-            ?: inputs.minByOrNull { it.bounds.top } ?: return null
+            ?: inputs.minByOrNull { it.bounds.top }
+        // Results on screen belong to the query in the field only after its search ran: "아이유 드라마"
+        // typed over the results of "김명기 say yes" left those stale results (and the model added one).
+        val typedAt = history.indexOfLast { it.action.startsWith("type ") && GoalText.normalize(it.action).contains(q) }
+        val searchPending = field != null && (!GoalText.normalize(field.value).contains(q) ||
+            (typedAt >= 0 && history.drop(typedAt + 1).none { Regex("^click \"(?:검색|search)\"$", RegexOption.IGNORE_CASE).matches(it.action) }))
+        if (adds.isNotEmpty() && !searchPending) {
+            // "아이유 노래 3곡": the best-matching rows not added yet, top of the results first.
+            val best = adds.filter { a -> a.label.substringAfter(" · ") !in added && history.none { it.action == "click \"${a.label}\"" } }
+                .sortedByDescending { GoalText.rowScore(query, it.label.substringAfter(" · ")) }.firstOrNull()
+            if (best != null && GoalText.rowMatches(query, best.label.substringAfter(" · ")))
+                return Auto(AgentAction.Click(best.id), "검색 결과 '${best.label.substringAfter(" · ").take(30)}'를 재생목록에 추가")
+        }
+        if (added.isNotEmpty()) return null // fewer matching results than asked: keep what was added
+        if (field == null) return null
         if (!GoalText.normalize(field.value).contains(q)) {
             if (history.count { it.action.startsWith("type ") && GoalText.normalize(it.action).contains(q) } >= 2) return null
             return Auto(AgentAction.Type(field.id, query, true), "검색창에 '$query' 입력")
         }
-        if (adds.isNotEmpty()) return null // results are shown but none names the song: the model scrolls or rephrases
+        if (adds.isNotEmpty() && !searchPending) return null // results are shown but none names the song: the model scrolls or rephrases
         val button = view.elements.firstOrNull { it.kind == Kind.BUTTON && it.enabled && Regex("^(?:검색|search)$", RegexOption.IGNORE_CASE).matches(it.label.trim()) }
             ?: return null
         if (history.takeLast(2).any { it.action == "click \"${button.label}\"" }) return null

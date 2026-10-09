@@ -138,6 +138,19 @@ object GoalText {
         return n.coerceIn(1, 10)
     }
 
+    /**
+     * "늙은 사랑 틀어줘", "클립스트림에서 길을 잃은 용사를 위한 노래 틀어줘" -> the song to play.
+     * Plain transport commands ("음악 틀어줘", "다음 곡 틀어줘") are media keys, not songs.
+     */
+    fun playSong(goal: String): String? {
+        if (Router.simpleMediaKey(goal) != null || Router.mediaKeyIn(goal) != null || GoalScope.multiple(goal)) return null
+        val g = goal.trim().let { if (namedApp(it) != null) it.substringAfter("에서").trim() else it }
+        val m = Regex("^(.+?)\\s*(?:을|를)?\\s*(?:틀어|재생해|들려)\\s*(?:줘|주세요|줄래|봐)?\\s*[.!?]?$").matchEntire(g) ?: return null
+        val query = m.groupValues[1].trim().replace(Regex("\\s*(?:을|를)$"), "").replace(Regex("\\s*(?:노래|음악|곡)$"), "").trim()
+        if (query.length < 2 || Regex("^(?:음악|노래|곡|아무거나|아무\\s*노래|다시|계속|랜덤|다음|이전|재생\\s*목록|플레이\\s*리스트)$").matches(query)) return null
+        return query
+    }
+
     /** "클립스트림에서 아이유 좋은날 재생목록에서 빼줘" -> "아이유 좋은날": the song to take out of the playlist. */
     fun playlistRemove(goal: String): String? {
         // "아이유 좋은날 재생목록에서 빼줘": that "…에서" names the playlist, not an app.
@@ -152,7 +165,19 @@ object GoalText {
     /** How many words of [query] a result row names ("아이유 좋은날" in "아이유(IU) - 좋은 날 [가사]" -> 2 of 2). */
     fun rowScore(query: String, row: String): Int {
         val r = normalize(row)
-        return query.trim().split(Regex("\\s+")).map(::normalize).filter { it.isNotEmpty() }.count { r.contains(it) || soundsLike(it, row) }
+        return query.trim().split(Regex("\\s+")).map(::normalize).filter { it.isNotEmpty() }.count { w ->
+            r.contains(w) || (w.length > 2 && w.endsWith("의") && r.contains(w.dropLast(1))) || soundsLike(w, row)
+        }
+    }
+
+    /**
+     * Whether a row names the requested song: every word of a one- or two-word query ("아이유 드라마"
+     * must not match "아이유 - 좋은 날"), most words of a longer one ("김명기의 say yes").
+     */
+    fun rowMatches(query: String, row: String): Boolean {
+        val words = query.trim().split(Regex("\\s+")).count { it.isNotBlank() }
+        val score = rowScore(query, row)
+        return words > 0 && if (words <= 2) score >= words else score * 3 >= words * 2
     }
 
     /** The app named in "X에서 …" ("시계 앱에서 …" → "시계"), if any. */

@@ -28,7 +28,7 @@ object UiProofs {
         val result=if(options.isEmpty()) "\"false,\\\"proofs\\\":[]\"" else
             "(\"false,\\\"proofs\\\":[]\" | \"true,\\\"proofs\\\":[\" proof (\",\" proof){0,3} \"]\")"
         return buildString {
-            appendLine("""root ::= "{\"ok\":" $result ",\"reason\":\"" char{0,50} "\"}"""")
+            appendLine("""root ::= "{\"ok\":" $result ",\"reason\":\"" char{0,30} "\"}"""")
             if(options.isNotEmpty()) appendLine("proof ::= " + options.joinToString(" | "))
             appendLine("""char ::= [^"\\\x00-\x1F] | "\\" ["\\/bfnrt]""")
         }

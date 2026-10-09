@@ -43,7 +43,7 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
             expectedPackage = app.packageName
             if (!index.launch(app)) return null
         } else return null
-        val confirmed = withTimeoutOrNull(2200) {
+        val confirmed = withTimeoutOrNull(4500) { // Device Care (battery) can take a few seconds to draw
             while (true) {
                 val view = phone.observe()?.let(ScreenCompactor::compact)
                 if (view?.snapshot?.packageName == expectedPackage &&

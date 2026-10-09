@@ -75,6 +75,8 @@ class Agent(
         var focus = ""
         val facts = ObservedFacts(goal = goal)
         val ineffective = mutableMapOf<Pair<Int, String>, Int>()
+        /** Per screen: clicks that led elsewhere. Coming back to that screen means they were dead ends. */
+        val tried = mutableMapOf<Int, MutableSet<String>>()
     }
 
     /** The model's completion check: [ok] plus a one-line reason (or, when ok, the result to tell the user). */
@@ -106,6 +108,12 @@ class Agent(
         // Hard evidence first: a search is not done while the query appears nowhere on screen.
         if (Harness.openScreenEvidence(goal, view)) return Verdict(true, GoalText.spokenResult(goal, ""))
         if (!Harness.searchShown(goal, view)) return Verdict(false, "검색어가 화면에 아직 없음")
+        // A plain single search ("X에서 Y 검색해줘") is done once Y was submitted and is on screen.
+        ShortcutGoals.literalSearch(goal)?.let { query ->
+            val submitted = run.history.any { it.action.startsWith("type ") && it.action.endsWith("+enter") &&
+                GoalText.normalize(it.action).contains(GoalText.normalize(query)) && it.outcome.contains("바뀜") }
+            if (!GoalScope.multiple(goal) && submitted) return Verdict(true, GoalText.spokenResult(goal, ""))
+        }
         if (!Harness.screenShown(goal, view)) return Verdict(false, "요청한 화면의 이름이 보이지 않음")
         listener.progress("전체 목표 완료 여부 확인 중…")
         val started = phone.now()
@@ -195,7 +203,14 @@ class Agent(
             val prompt = Prompts.step(goal, notes(), run.history, view, config.withNote, run.facts.lines())
             val t0 = phone.now()
             val fingerprint = progressFingerprint(view, goal)
-            val excluded = view.elements.filter { e -> (run.ineffective[fingerprint to "click \"${e.label}\""] ?: 0) > 0 }.map { it.id }.toSet()
+            // Back on a screen visited before: whatever was opened from here did not finish the goal,
+            // so explore something else (another item, scroll, search) instead of circling.
+            val deadEnds = run.tried[fingerprint].orEmpty()
+            val excluded = view.elements.filter { e ->
+                (run.ineffective[fingerprint to "click \"${e.label}\""] ?: 0) > 0 || "click \"${e.label}\"" in deadEnds
+            }.map { it.id }.toSet()
+            if (deadEnds.isNotEmpty() && run.history.lastOrNull()?.action != "다시 온 화면") run.history += HistoryLine("다시 온 화면",
+                "이미 열어 본 ${deadEnds.joinToString(", ") { it.removePrefix("click ") }}에는 답이 없었음. 다른 항목·scroll·검색을 시도")
             val excludedLong = view.elements.filter { e -> (run.ineffective[fingerprint to "long_click \"${e.label}\""] ?: 0) > 0 }.map { it.id }.toSet()
             val excludedOps = buildSet {
                 if ((run.ineffective[fingerprint to "back"] ?: 0) > 0) add("back")
@@ -212,6 +227,9 @@ class Agent(
             }
             run.badOutput = 0
             val liveView = observe(run) ?: view
+            // A lock screen that appeared meanwhile (Secure Folder pattern, shown by Settings) is not a
+            // foreign app: hand it to the unlock request at the top of the loop.
+            if (Harness.authScreen(liveView)) { view = liveView; continue }
             if (liveView.snapshot.packageName != view.snapshot.packageName) {
                 listener.step(StepRecord(index, "harness", "", raw, "stop", "전면 앱 전환으로 중단", "모델 계산 중 다른 앱이 전면에 나타나 이전 목표로 조작하지 않음", modelMs, phone.now() - started))
                 return fail(run, "실행 중 다른 앱으로 전환되어 중단했어요. 원래 작업 화면에서 다시 요청해 주세요.")
@@ -462,6 +480,8 @@ class Agent(
                 }
             }
         }
+        if ((action is AgentAction.Click || action is AgentAction.LongClick) && outcome.contains("바뀜"))
+            run.tried.getOrPut(progressFingerprint(view, run.goal)) { mutableSetOf() } += description
         val actualStateChange=StateMutation.evidence(action,view,next)
         run.history += HistoryLine(description, if(actualStateChange.isEmpty()) outcome else "$outcome; $actualStateChange")
         // GPS distances, elapsed time and other text changes do not prove the requested operation

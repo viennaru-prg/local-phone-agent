@@ -128,6 +128,17 @@ object GoalText {
         return query.takeIf { it.length >= 2 && !Regex("재생\\s*목록|플레이\\s*리스트").containsMatchIn(it) }
     }
 
+    /** "클립스트림에서 아이유 좋은날 재생목록에서 빼줘" -> "아이유 좋은날": the song to take out of the playlist. */
+    fun playlistRemove(goal: String): String? {
+        // "아이유 좋은날 재생목록에서 빼줘": that "…에서" names the playlist, not an app.
+        val app = namedApp(goal)?.takeIf { !Regex("재생\\s*목록|플레이\\s*리스트").containsMatchIn(it) }
+        val g = goal.trim().let { if (app != null) it.substringAfter("에서").trim() else it }
+        val m = Regex("^(.+?)\\s*(?:(?:현재\\s*)?(?:재생\\s*목록|플레이\\s*리스트)\\s*에서\\s*)?(?:빼|삭제해|지워|제거해)\\s*(?:줘|주세요|줄래)?\\s*[.!?]?$")
+            .matchEntire(g) ?: return null
+        val query = m.groupValues[1].trim().replace(Regex("\\s*(?:을|를)$"), "").replace(Regex("\\s+(?:노래|음악|곡)$"), "").trim()
+        return query.takeIf { it.length >= 2 && !Regex("재생\\s*목록|플레이\\s*리스트").containsMatchIn(it) }
+    }
+
     /** How many words of [query] a result row names ("아이유 좋은날" in "아이유(IU) - 좋은 날 [가사]" -> 2 of 2). */
     fun rowScore(query: String, row: String): Int {
         val r = normalize(row)
@@ -136,7 +147,10 @@ object GoalText {
 
     /** The app named in "X에서 …" ("시계 앱에서 …" → "시계"), if any. */
     fun namedApp(goal: String): String? =
-        Regex("^(.+?)\\s*(?:앱)?에서\\s").find(goal.trim())?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() && it.length <= 20 }
+        Regex("^(.+?)\\s*(?:앱)?에서\\s").find(goal.trim())?.groupValues?.get(1)?.trim()?.takeIf {
+            // "아이유 좋은날 재생목록에서 빼줘": a list inside the current app, not an app.
+            it.isNotEmpty() && it.length <= 20 && !Regex("(?:재생\\s*목록|플레이\\s*리스트|목록|리스트)$").containsMatchIn(it)
+        }
 
     /**
      * Notes may start with "[키워드, 키워드]". Tagged notes are shown only when the goal mentions one

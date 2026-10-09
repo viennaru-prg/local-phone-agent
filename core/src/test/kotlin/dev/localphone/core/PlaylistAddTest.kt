@@ -42,6 +42,7 @@ private class FakeClipStream(private val scope: TestScope) : Phone {
                     label == "재생목록 만들기" -> created++
                 }
             }
+            is AgentAction.TapEnd -> playlist.remove(view.element(action.id)?.label)
             else -> {}
         }
         return true
@@ -58,6 +59,28 @@ class PlaylistAddTest {
         assertEquals("좋은날", GoalText.playlistAdd("좋은날 노래 플레이리스트에 넣어줘"))
         assertEquals("아이유 좋은날", GoalText.playlistAdd("아이유 좋은날을 재생목록에 담아줘"))
         assertEquals(null, GoalText.playlistAdd("회사로 안내해줘"))
+    }
+
+    @Test fun removeGoalsNameTheSong() {
+        assertEquals("더 크로스", GoalText.playlistRemove("클립스트림에서 더 크로스 재생목록에서 빼줘"))
+        assertEquals("더 크로스", GoalText.playlistRemove("더 크로스 재생목록에서 빼줘"))
+        assertEquals("우디 어제보다 슬픈 오늘", GoalText.playlistRemove("우디 어제보다 슬픈 오늘 노래 삭제해줘"))
+        assertEquals(null, GoalText.playlistRemove("재생목록 삭제해줘"))
+    }
+
+    @Test fun removeTapsTheRowsDeleteIconAndConfirmsTheRowIsGone() = runTest {
+        val phone = FakeClipStream(this)
+        val calls = mutableListOf<String>()
+        val model = object : LanguageModel {
+            override suspend fun decide(prompt: ModelPrompt, grammar: String): String { calls += prompt.system; return """{"action":"back","check":false}""" }
+        }
+        val result = Agent(model, phone, RecipeBook({ null }, {}), { emptyList() }, AgentConfig(withNote = false)).run("더 크로스 재생목록에서 빼줘")
+        val log = result.history.joinToString("\n")
+        assertEquals(Outcome.DONE, result.outcome, log)
+        assertEquals(listOf("Woody - 어제보다 슬픈 오늘"), phone.playlist, log)
+        assertTrue(calls.isEmpty(), "no model call: $calls\n$log")
+        assertTrue(Guard.blocked("더 크로스 재생목록에서 빼줘", AgentAction.Click(
+            ScreenCompactor.compact(phone.observe()).elements.first { it.label == "재생목록 만들기" }.id), ScreenCompactor.compact(phone.observe())) != null)
     }
 
     @Test fun searchesPressesSearchAndAddsTheMatchingRowWithoutTheModel() = runTest {

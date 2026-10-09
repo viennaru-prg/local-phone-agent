@@ -64,7 +64,7 @@ object RecipeRecorder {
             label = action.id?.let { view?.element(it)?.label }.orEmpty())
         AgentAction.Back -> RecipeStep("back")
         is AgentAction.Media -> RecipeStep("media", key = action.key.name.lowercase())
-        AgentAction.Wait, is AgentAction.Inspect, is AgentAction.Done, is AgentAction.Ask, is AgentAction.Fail -> null
+        AgentAction.Wait, is AgentAction.TapEnd, is AgentAction.Inspect, is AgentAction.Done, is AgentAction.Ask, is AgentAction.Fail -> null
     }
 
     /** Finds the element a recorded step refers to on the current screen. Exact label first. */

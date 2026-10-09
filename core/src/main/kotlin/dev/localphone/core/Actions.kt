@@ -10,6 +10,8 @@ sealed interface AgentAction {
     data class OpenApp(val app: String) : AgentAction
     data class Click(val id: Int) : AgentAction
     data class LongClick(val id: Int) : AgentAction
+    /** Harness only: tap the icon at the right end of a row (ClipStream's delete icon has no node of its own). */
+    data class TapEnd(val id: Int) : AgentAction
     data class Type(val id: Int, val text: String, val enter: Boolean) : AgentAction
     data class Scroll(val dir: ScrollDir, val id: Int?) : AgentAction
     data class Inspect(val query: String) : AgentAction
@@ -74,6 +76,7 @@ fun AgentAction.describe(view: ScreenView?, ids: Boolean = true): String {
         is AgentAction.OpenApp -> "open_app \"$app\""
         is AgentAction.Click -> "click ${el(id)}"
         is AgentAction.LongClick -> "long_click ${el(id)}"
+        is AgentAction.TapEnd -> "click_end ${el(id)}"
         is AgentAction.Type -> "type ${el(id)} \"$text\"" + if (enter) " +enter" else ""
         is AgentAction.Scroll -> "scroll ${dir.name.lowercase()}" + (id?.let { " " + el(it) } ?: "")
         is AgentAction.Inspect -> "inspect \"$query\""

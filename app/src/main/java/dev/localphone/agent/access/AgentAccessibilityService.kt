@@ -161,13 +161,15 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     /** Revalidate identity, enabled state and bounds before a gesture; never tap cached coordinates. */
-    suspend fun tapObserved(snapshot: Snapshot, index: Int): Boolean {
+    /** [trailing]: the icon drawn at the row's right end (a delete icon not exposed as its own node). */
+    suspend fun tapObserved(snapshot: Snapshot, index: Int, trailing: Boolean = false): Boolean {
         val node = live(snapshot, index) ?: return false
         try {
             if (!node.isEnabled || !node.isVisibleToUser || node.isPassword) return false
             val bounds = Rect(); node.getBoundsInScreen(bounds)
             if (bounds.isEmpty) return false
-            return tap(bounds.exactCenterX(), bounds.exactCenterY(), 60)
+            val x = if (trailing) bounds.right - bounds.height() * 0.4f else bounds.exactCenterX()
+            return tap(x, bounds.exactCenterY(), 60)
         } finally { node.recycleCompat() }
     }
 

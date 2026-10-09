@@ -26,6 +26,7 @@ class AndroidPhone(private val context: Context) : Phone {
             is AgentAction.Type -> node(action.id)?.let { s.setText(snap, it, action.text, action.enter) } ?: false
             is AgentAction.Scroll -> s.scroll(snap, action.id?.let(::node) ?: view.lists.maxByOrNull { it.bounds.height * it.bounds.width }?.node, action.dir)
             AgentAction.Back -> s.back()
+            is AgentAction.TapEnd -> node(action.id)?.let { s.tapObserved(snap, it, trailing = true) } ?: false
             else -> false
         }
     }

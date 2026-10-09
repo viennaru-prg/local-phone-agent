@@ -56,6 +56,10 @@ class AgentService : Service() {
                 Log.i("AgentDump", "package=${snapshot?.packageName} label=${snapshot?.appLabel} home=${snapshot?.home} nodes=${snapshot?.nodes?.size} " +
                     "diag=${AgentAccessibilityService.instance?.observationDiagnostic}")
                 view?.render()?.lines()?.forEach { Log.i("AgentDump", it) }
+                snapshot?.nodes?.forEachIndexed { i, n ->
+                    Log.d("AgentDumpRaw", "$i p=${n.parent} ${n.className.substringAfterLast('.')} t='${n.text.take(30)}' d='${n.desc.take(30)}' " +
+                        "id=${n.viewId.substringAfterLast('/')} c=${n.clickable} b=${n.bounds.left},${n.bounds.top},${n.bounds.right},${n.bounds.bottom}")
+                }
                 Log.i("AgentDump", "END")
                 if (job?.isActive != true) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
             }

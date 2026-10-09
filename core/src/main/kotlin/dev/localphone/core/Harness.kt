@@ -22,6 +22,7 @@ object Harness {
         emptyScreen(view, history)?.let { return it }
         mediaControl(goal, view, history)?.let { return it }
         playlistAdd(goal, view, history)?.let { return it }
+        playlistRemove(goal, view, history)?.let { return it }
         if (!ShortcutGoals.allowsUiHeuristics(goal)) return null
         resumePrompt(goal, view)?.let { return it }
         unrelatedSheet(goal, view, history)?.let { return it }
@@ -135,6 +136,46 @@ object Harness {
      * button, then press the add button on the result row that names the song. The small model kept
      * pressing "재생목록 만들기" instead; these steps are the same in every player with a search box.
      */
+    /** The playlist row whose end (delete) icon was tapped for [query], if the tap changed the screen. */
+    fun removedRow(query: String, history: List<HistoryLine>): String? = history.asReversed().firstNotNullOfOrNull { h ->
+        val label = Regex("^click_end \"(.*)\"$").matchEntire(h.action)?.groupValues?.get(1) ?: return@firstNotNullOfOrNull null
+        label.takeIf { h.outcome.contains("바뀜") && GoalText.rowScore(query, it) * 2 >= query.trim().split(Regex("\\s+")).size }
+    }
+
+    /**
+     * "<노래> 재생목록에서 빼줘": find the playlist row naming the song (scrolling its list) and tap the
+     * delete icon at the row's end. ClipStream draws that icon inside the row button without a node.
+     */
+    private fun playlistRemove(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
+        val query = GoalText.playlistRemove(goal) ?: return null
+        if (view.snapshot.home || removedRow(query, history) != null) return null
+        val wanted = query.trim().split(Regex("\\s+")).size
+        fun isRow(e: Element) = (e.kind == Kind.BUTTON || e.kind == Kind.ITEM) && e.enabled && !e.label.contains(" · ") &&
+            e.bounds.width * 2 >= view.snapshot.width && e.bounds.height >= 80
+        val rows = view.elements.filter(::isRow)
+        fun area(e: Element) = e.bounds.width.toLong() * e.bounds.height
+        // The innermost list around a row is the one that scrolls it (the page itself scrolls too).
+        fun box(row: Element) = view.lists.filter { l -> row.bounds.centerY in l.bounds.top..l.bounds.bottom &&
+            row.bounds.centerX in l.bounds.left..l.bounds.right }.minByOrNull(::area)
+        val scrolls = history.count { it.action.startsWith("scroll") }
+        val stuck = history.lastOrNull()?.let { it.action.startsWith("scroll") && it.outcome.startsWith("변화 없음") } == true
+        rows.filter { GoalText.rowScore(query, it.label) * 2 >= wanted }.maxByOrNull { GoalText.rowScore(query, it.label) }?.let { row ->
+            val list = box(row)
+            // Half hidden under the mini player: the end of the row may be another control. Move it into view first.
+            if (list != null && (row.bounds.top < list.bounds.top || row.bounds.bottom > list.bounds.bottom)) {
+                if (scrolls >= 6 || stuck) return null
+                return Auto(AgentAction.Scroll(if (row.bounds.centerY > list.bounds.centerY) ScrollDir.DOWN else ScrollDir.UP, list.id),
+                    "'${row.label.take(20)}' 줄이 잘려 보여 목록을 움직임")
+            }
+            if (history.count { it.action == "click_end \"${row.label}\"" } >= 2) return null
+            return Auto(AgentAction.TapEnd(row.id), "재생목록의 '${row.label.take(30)}' 줄 끝 삭제 아이콘")
+        }
+        // Not visible: scroll the innermost list holding playlist rows, a few times at most.
+        if (scrolls >= 6 || stuck) return null
+        val list = rows.mapNotNull(::box).minByOrNull(::area) ?: return null
+        return Auto(AgentAction.Scroll(ScrollDir.DOWN, list.id), "재생목록에서 '$query' 찾기")
+    }
+
     private fun playlistAdd(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
         val query = GoalText.playlistAdd(goal) ?: return null
         if (view.snapshot.home || addedRow(query, history) != null) return null

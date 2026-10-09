@@ -105,7 +105,7 @@ class Agent(
 
     private suspend fun verify(goal: String, run: Run, view: ScreenView, answer: String = ""): Verdict {
         mediaEvidence(goal, run)?.let { return Verdict(true, it) }
-        playlistEvidence(goal, run)?.let { return Verdict(true, it) }
+        playlistEvidence(goal, run, view)?.let { return Verdict(true, it) }
         if (Router.simpleMediaKey(goal) != null && phone.musicActive() != null) return Verdict(false, "음악 상태가 아직 요청과 다름")
         navigation?.let {
             val evidence = it.observe(view)
@@ -148,12 +148,16 @@ class Agent(
      * pressed while music plays. A player inside Secure Folder ignores media keys from this profile, so
      * the agent presses its on-screen controls and this audio state is the proof.
      */
-    private fun playlistEvidence(goal: String, run: Run): String? {
-        val query = GoalText.playlistAdd(goal) ?: return null
-        Harness.addedRow(query, run.history) ?: return null
-        val last = query.last()
-        val particle = if (last in '가'..'힣' && (last - '가') % 28 != 0) "을" else "를"
-        return "$query$particle 재생목록에 추가했어요."
+    private fun playlistEvidence(goal: String, run: Run, view: ScreenView): String? {
+        fun obj(q: String) = q + if (q.last() in '가'..'힣' && (q.last() - '가') % 28 != 0) "을" else "를"
+        GoalText.playlistAdd(goal)?.let { query ->
+            Harness.addedRow(query, run.history) ?: return null
+            return "${obj(query)} 재생목록에 추가했어요."
+        }
+        val query = GoalText.playlistRemove(goal) ?: return null
+        // Removed = the row whose end icon was tapped is no longer on screen.
+        val row = Harness.removedRow(query, run.history) ?: return null
+        return if (view.elements.none { it.label == row }) "${obj(query)} 재생목록에서 뺐어요." else null
     }
 
     private fun mediaEvidence(goal: String, run: Run): String? {
@@ -228,8 +232,8 @@ class Agent(
                 return finish(run, goal, "")
             }
             // Hard evidence for music and app goals: the system audio state / the app in front.
-            playlistEvidence(goal, run)?.let { say ->
-                listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "추가 버튼을 누른 뒤 화면이 바뀜", 0, phone.now() - started))
+            playlistEvidence(goal, run, view)?.let { say ->
+                listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "재생목록 변경(추가·삭제) 확인", 0, phone.now() - started))
                 return finish(run, goal, say)
             }
             mediaEvidence(goal, run)?.let { say ->
@@ -384,7 +388,7 @@ class Agent(
         }
         if (!finishing) return null
         // The harness already knows the next step (search pressed → add the result): no verifier call.
-        if (Harness.preDecide(goal, next, run.history) != null && GoalText.playlistAdd(goal) != null) return null
+        if (Harness.preDecide(goal, next, run.history) != null && (GoalText.playlistAdd(goal) ?: GoalText.playlistRemove(goal)) != null) return null
         // For an atomic termination the model selected the terminating operation. Its actual
         // disappeared control and changed screen are the postcondition; a second planner must not
         // start exploring the normal screen again. Compound goals still use whole-goal verification.
@@ -677,6 +681,10 @@ object Guard {
         // An app's "새 버전 1.1.108을 설치할 수 있습니다" banner led into the unknown-sources settings.
         if (install.containsMatchIn(label) && !install.containsMatchIn(goal)) return "목표에 없는 설치·업데이트라 누르지 않음"
         // Deleting is allowed only when the user asked to remove something ("빼줘", "삭제해줘", ...).
+        // "아이유 좋은날 재생목록에서 빼줘" removes one song; "재생목록 삭제" would delete the whole playlist.
+        if (Regex("(?:재생\\s*목록|플레이\\s*리스트|목록)\\s*(?:삭제|지우기|제거)|전체\\s*삭제|모두\\s*지우기").containsMatchIn(label) &&
+            !Regex("(?:재생\\s*목록|플레이\\s*리스트)\\s*(?:을|를)?\\s*(?:삭제|지워|없애)").containsMatchIn(goal))
+            return "곡이 아니라 목록 전체를 지우는 버튼이라 누르지 않음"
         if (delete.containsMatchIn(label) && !Regex("삭제|지워|빼|제거|remove|delete", RegexOption.IGNORE_CASE).containsMatchIn(goal))
             return "목표에 없는 삭제 동작이라 실행하지 않음"
         return null

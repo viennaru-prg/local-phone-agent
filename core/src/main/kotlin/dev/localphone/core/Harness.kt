@@ -134,6 +134,14 @@ object Harness {
      */
     private fun mediaControl(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
         val key = Router.mediaKeyIn(goal) ?: return null
+        // The key already went out and no player is on screen: give the system audio state time to catch
+        // up (a Secure Folder player lags) before anything goes looking for the player.
+        if (!isPlayer(view) && history.any { it.action.startsWith("media") }) {
+            if (Skills.waitsSince(history) < 2) return Auto(AgentAction.Wait, "보낸 재생 키가 반영될 때까지 기다림")
+            // The key did not reach the player (Secure Folder): open the music app and use its own buttons.
+            AppProfiles.appFor("music")?.takeIf { history.none { h -> h.action.startsWith("open_app") } }
+                ?.let { return Auto(AgentAction.OpenApp(it), "재생 키가 닿지 않아 음악 앱을 열어 화면 버튼 사용") }
+        }
         val pattern = when (key) { MediaKey.PLAY -> playLabel; MediaKey.PAUSE -> pauseLabel; MediaKey.NEXT -> nextLabel; MediaKey.PREVIOUS -> prevLabel }
         val control = view.elements.filter { it.kind == Kind.BUTTON || it.kind == Kind.ITEM }
             .filter { it.enabled && pattern.matches(it.label.trim()) }.singleOrNull() ?: return null

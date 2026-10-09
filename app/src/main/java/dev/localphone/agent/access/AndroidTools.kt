@@ -90,7 +90,8 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
         if (key != MediaKey.PLAY && key != MediaKey.PAUSE && !playingBefore) return null // nothing to skip; let the agent open the player
         if (!phone.media(key)) return null
         val wanted = key != MediaKey.PAUSE
-        val confirmed = withTimeoutOrNull(3000) {
+        // Secure Folder players report their audio state a few seconds late.
+        val confirmed = withTimeoutOrNull(5000) {
             while (audio.isMusicActive != wanted) delay(150)
             true
         } ?: false

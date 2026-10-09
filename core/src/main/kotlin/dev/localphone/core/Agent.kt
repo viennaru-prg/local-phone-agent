@@ -306,7 +306,7 @@ class Agent(
             val excludedOps = buildSet {
                 if ((run.ineffective[fingerprint to "back"] ?: 0) > 0) add("back")
                 // "open_app 설정" seven times in a row while 설정 was already in front.
-                if (run.history.lastOrNull()?.let { it.action.startsWith("open_app") && it.outcome.contains("이미 열려") } == true) add("open")
+                if (run.history.lastOrNull()?.let { it.action.startsWith("open_app") && (it.outcome.contains("이미 열려") || it.outcome.contains("찾지 못함")) } == true) add("open")
                 if (navigation == null && !CompletionGrounding.hasOutcome(goal,view,run.history)) add("done")
             }
             val raw = model.decide(prompt, ActionGrammar.forView(view, config.withNote, excluded, excludedLong, excludedOps))

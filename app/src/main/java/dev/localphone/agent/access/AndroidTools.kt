@@ -33,11 +33,12 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
                 DirectGoals.SettingsScreen.DISPLAY -> Settings.ACTION_DISPLAY_SETTINGS
                 DirectGoals.SettingsScreen.SOUND -> Settings.ACTION_SOUND_SETTINGS
                 DirectGoals.SettingsScreen.BATTERY -> Intent.ACTION_POWER_USAGE_SUMMARY
+                DirectGoals.SettingsScreen.ALARM -> android.provider.AlarmClock.ACTION_SHOW_ALARMS
             }
             val intent = Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            @Suppress("DEPRECATION")
-            val target = context.packageManager.resolveActivity(intent, 0) ?: return null
-            expectedPackage = target.activityInfo.packageName
+            // No resolveActivity: package visibility hides the clock app from it, and the screen is
+            // confirmed by its own title/controls below anyway.
+            expectedPackage = ""
             if (runCatching { context.startActivity(intent) }.isFailure) return null
         } else if (app != null) {
             expectedPackage = app.packageName

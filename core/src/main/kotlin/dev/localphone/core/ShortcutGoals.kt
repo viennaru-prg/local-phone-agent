@@ -31,7 +31,11 @@ object ShortcutGoals {
         if (GoalScope.multiple(goal)) return null
         val text = body(goal)
         if (qualified.containsMatchIn(text)) return null
-        return Regex("^(.+?)\\s*(?:을|를)?\\s*검색(?:\\s*해\\s*줘|\\s*해\\s*주세요|\\s*해|\\s*줘)?\\s*[.!?]?$")
+        Regex("^(.+?)\\s*(?:을|를)?\\s*검색(?:\\s*해\\s*줘|\\s*해\\s*주세요|\\s*해|\\s*줘)?\\s*[.!?]?$")
+            .matchEntire(text)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() && it.length <= 40 }?.let { return it }
+        // "네이버 지도에서 근처 주유소 찾아줘" is a search inside the named app (the model went to 길찾기).
+        if (GoalText.namedApp(goal) == null) return null
+        return Regex("^(.+?)\\s*(?:을|를)?\\s*찾아\\s*(?:줘|봐|주세요|줄래)?\\s*[.!?]?$")
             .matchEntire(text)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() && it.length <= 40 }
     }
 

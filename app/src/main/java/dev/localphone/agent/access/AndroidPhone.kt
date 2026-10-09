@@ -11,6 +11,11 @@ import kotlinx.coroutines.withTimeoutOrNull
 /** Bridges the core agent to the accessibility service, launcher and audio system. */
 class AndroidPhone(private val context: Context) : Phone {
     private val apps = AppIndex(context)
+
+    private companion object {
+        /** Labels of the icons last seen inside Secure Folder (this process), null until it was opened once. */
+        @Volatile var secureFolderApps: Set<String>? = null
+    }
     private val service get() = AgentAccessibilityService.instance
 
     // Reading another app's tree is blocking IPC; keep it off the main thread (the overlay lives there).
@@ -70,16 +75,31 @@ class AndroidPhone(private val context: Context) : Phone {
             GoalText.soundsLike(name, label)
         observe()?.takeIf { !it.home && matches(it.appLabel) }?.let { return OpenAppResult(true, "$ALREADY_OPEN: ${it.appLabel}") }
         val folder = (apps.find("보안 폴더", allowFuzzy = false) as? AppIndex.Match.Found)?.app ?: return null
+        // Icons seen inside Secure Folder before: do not open it for a name that is not there ("알람").
+        secureFolderApps?.let { known -> if (known.none(::matches)) return null }
         if (!apps.launch(folder)) return null
-        val (view, icon) = withTimeoutOrNull(4000) {
+        var last: ScreenView? = null
+        val found = withTimeoutOrNull(4000) {
             while (true) {
                 val view = observe()?.let(ScreenCompactor::compact)
-                if (view != null && view.snapshot.packageName == folder.packageName)
+                if (view != null && view.snapshot.packageName == folder.packageName) {
+                    last = view
                     view.elements.firstOrNull { it.enabled && matches(it.label) }?.let { return@withTimeoutOrNull view to it }
+                }
                 delay(150)
             }
             @Suppress("UNREACHABLE_CODE") null
-        } ?: return null
+        }
+        last?.takeIf { !Harness.authScreen(it) }?.let { seen ->
+            secureFolderApps = seen.elements.filter { it.kind != Kind.TEXT && it.kind != Kind.LIST }.map { it.label }.toSet()
+        }
+        if (found == null) {
+            // Unlocked but no such app: leave Secure Folder instead of stranding the user in it. A
+            // locked folder stays in front so the agent can ask the user to unlock it.
+            if (last != null && !Harness.authScreen(last!!)) service?.back()
+            return null
+        }
+        val (view, icon) = found
         if (!perform(view, AgentAction.Click(icon.id))) return null
         val opened = withTimeoutOrNull(4500) {
             while (true) {

@@ -91,7 +91,10 @@ class VoiceActivity : Activity() {
         title.text = question ?: "말씀하세요"
         heard.text = ""
         listener = Listener(this, onPartial = { heard.text = it }, onReady = {
-            getSystemService(Vibrator::class.java)?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK))
+            // A clear "speak now": words said before the microphone opened were lost ("안내해 줘" without its place).
+            getSystemService(Vibrator::class.java)?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK))
+            runCatching { android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 70).startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 120) }
+            title.text = question ?: "지금 말씀하세요"
         }).also { l ->
             l.start { result ->
                 when (result) {

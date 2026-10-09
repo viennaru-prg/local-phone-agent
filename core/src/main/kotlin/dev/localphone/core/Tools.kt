@@ -162,6 +162,9 @@ class Assistant(
     suspend fun run(goal: String, previous: List<HistoryLine> = emptyList()): AgentResult {
         if (previous.isNotEmpty()) return agent.run(goal, previous)
         if (GoalText.isChatter(goal)) return AgentResult(Outcome.FAILED, "할 일을 알아듣지 못했어요. 다시 말씀해 주세요.", emptyList())
+        // "안내해 줘" whose place was cut off: ask for it rather than guess.
+        if (Regex("안내|길\\s*찾|내비|네비|데려다").containsMatchIn(goal) && !Regex("종료|그만|꺼|끝").containsMatchIn(goal) && GoalText.missingDestination(goal))
+            return AgentResult(Outcome.ASK, "어디로 안내할까요?", listOf(HistoryLine("목적지 질문", goal)))
         // A name with no request ("이름 모임") would only send the screen agent wandering the app in front.
         if (!GoalText.hasRequest(goal)) return AgentResult(Outcome.FAILED, "'${goal.trim()}'을(를) 어떻게 할지 함께 말씀해 주세요. 예: 회사로 안내해줘", emptyList())
         tools.openDirect(goal)?.let {

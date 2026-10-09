@@ -73,6 +73,20 @@ object GoalText {
             "빼|삭제|지워|제거|넘겨|올려|내려|줄여|늘려|바꿔|설정|맞춰|보내|전화|읽어|불러|시작|종료|그만|play|pause|stop|open|search|navigate"
     ).containsMatchIn(normalize(goal))
 
+    /** "안내해 줘", "차로 안내해 줘": a navigation request whose place was lost (cut off at the start). */
+    fun missingDestination(goal: String): Boolean {
+        val target = ShortcutGoals.navigationTarget(goal)?.let(::normalize) ?: return true
+        return target.isEmpty() || target in setOf("차", "차로", "길", "거기", "여기", "저기", "그곳", "목적지", "네비", "내비")
+    }
+
+    /** The answer to "어디로 안내할까요?" made into a command: "일요모임" → "일요모임으로 안내해줘". */
+    fun navigationGoalFrom(answer: String): String {
+        val place = answer.trim().replace(Regex("\\s*(?:으로|로)?\\s*(?:안내해\\s*줘|가\\s*줘|가자|요)?[.!?]?$"), "").trim()
+        val c = place.lastOrNull() ?: return answer
+        val ro = if (c in '가'..'힣' && (c - '가') % 28 != 0 && (c - '가') % 28 != 8) "으로" else "로"
+        return "$place$ro 안내해줘"
+    }
+
     /** "네이버 지도에서 카페 검색해줘" → "카페"; "아이유 노래 검색해줘" → "아이유 노래". */
     fun searchQuery(goal: String): String? {
         val m = Regex("^(?:.*?에서\\s*)?(.+?)\\s*(?:을|를)?\\s*(?:검색|찾아)").find(goal.trim()) ?: return null

@@ -136,6 +136,10 @@ class NavigationTest {
         other.observe(page)
         assertEquals("수요모…", page.element((other.nextAction(page, 0)?.action as AgentAction.Click).id)?.label)
         assertFalse(GoalText.hasRequest("이름 모임")); assertTrue(GoalText.hasRequest("수요모임 안내해줘"))
+        assertTrue(GoalText.missingDestination("안내해 줘")); assertTrue(GoalText.missingDestination("차로 안내해 줘"))
+        assertFalse(GoalText.missingDestination("일요 모임으로 안내해 줘"))
+        assertEquals("일요모임으로 안내해줘", GoalText.navigationGoalFrom("일요모임"))
+        assertEquals("회사로 안내해줘", GoalText.navigationGoalFrom("회사로 가줘"))
     }
 
     @Test fun aCutNameInTheCarouselStillMatches() {

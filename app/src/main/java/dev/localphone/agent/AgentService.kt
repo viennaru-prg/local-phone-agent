@@ -46,7 +46,9 @@ class AgentService : Service() {
             ACTION_ANSWER -> pending?.let { p ->
                 pending = null
                 val answer = intent.getStringExtra(EXTRA_GOAL).orEmpty()
-                start(p.goal, p.history + HistoryLine("사용자 답변", answer), intent)
+                // "어디로 안내할까요?" → "일요모임": the answer is the destination of a fresh command.
+                if (p.history.any { it.action == "목적지 질문" }) start(GoalText.navigationGoalFrom(answer), emptyList(), intent)
+                else start(p.goal, p.history + HistoryLine("사용자 답변", answer), intent)
             } ?: finish("이어갈 질문이 없습니다. 명령을 다시 말씀해 주세요.", speak = true, id = runId)
             // Debug builds: log what the agent would see on the current screen after a delay (other app in front).
             ACTION_DUMP -> if (BuildConfig.ADB_GOALS) scope.launch {

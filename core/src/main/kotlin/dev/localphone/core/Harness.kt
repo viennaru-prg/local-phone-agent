@@ -178,7 +178,17 @@ object Harness {
     fun noGuidance(goal: String, view: ScreenView, history: List<HistoryLine>): Boolean {
         val app = navigationApp()
         return isEndGuidance(goal) && view.snapshot.packageName == app.packageName && view.elements.size >= 5 &&
-            view.elements.none { app.activeGuidanceRegex().containsMatchIn(it.label) } && history.none { it.action.startsWith("click") }
+            view.elements.none { app.activeGuidanceRegex().containsMatchIn(it.label) } && history.none { it.action.startsWith("click") } &&
+            settledInNavigationApp(view, history)
+    }
+
+    /**
+     * The map just opened shows its home (with a "splash" layer) for a moment before it returns to the
+     * running guidance: "길안내 중이 아니에요" was said while guidance was on. Judge only after a few waits.
+     */
+    private fun settledInNavigationApp(view: ScreenView, history: List<HistoryLine>): Boolean {
+        val loading = view.elements.any { Regex("^splash$|로딩|loading", RegexOption.IGNORE_CASE).containsMatchIn(it.label.trim()) }
+        return Skills.waitsSince(history) >= (if (loading) 4 else 2)
     }
 
     /** Guidance was ended: its end control was pressed and the driving controls are gone. */
@@ -200,7 +210,12 @@ object Harness {
         if (ended > 0) view.elements.firstOrNull { it.enabled && it.kind != Kind.TEXT && Regex("^(?:종료|확인|예)$").matches(it.label.trim()) }?.let {
             return Auto(AgentAction.Click(it.id), "안내 종료 확인")
         }
-        if (ended == 0 && view.elements.none { app.activeGuidanceRegex().containsMatchIn(it.label) }) return null
+        if (ended == 0 && view.elements.none { app.activeGuidanceRegex().containsMatchIn(it.label) }) {
+            // No driving controls yet: give the map time to come back to its guidance screen before
+            // concluding there is none (noGuidance needs these waits).
+            return if (view.snapshot.packageName == app.packageName && !settledInNavigationApp(view, history))
+                Auto(AgentAction.Wait, "지도 앱이 주행 화면으로 돌아올 때까지 기다림") else null
+        }
         return Skills.pressBehindMenu(app.endGuidanceRegex(), view, history, "안내 종료")
     }
 

@@ -158,6 +158,22 @@ class NavigationTest {
         assertEquals(listOf("집", "회사"), s.choiceNeeded())
     }
 
+    @Test fun aJustOpenedMapIsGivenTimeToReturnToItsGuidanceBeforeSayingThereIsNone() {
+        fun items(v: ScreenView) = v.copy(elements = v.elements.map { e -> e.copy(kind = Kind.ITEM) })
+        val goal = "내비게이션 꺼 줘"
+        val loading = items(navView("splash", "지도", "길찾기", "음식점", "카페", "편의점"))
+        val opened = listOf(HistoryLine("open_app \"네이버 지도\"", "열림: 네이버지도"))
+        assertEquals(AgentAction.Wait, Harness.preDecide(goal, loading, opened)?.action)
+        assertFalse(Harness.noGuidance(goal, loading, opened))
+        // The guidance screen came back: its drawer is opened next.
+        val driving = items(navView("고매로20번길", "경로 다시 계산 (v reroute)", "메뉴·옵션 열기 (v drawer)"))
+        val waited = opened + HistoryLine("wait", "화면 바뀜")
+        assertEquals(AgentAction.Click(3), Harness.preDecide(goal, driving, waited)?.action)
+        // Still only the map after several waits: then there really is no guidance.
+        val long = opened + List(4) { HistoryLine("wait", "변화 없음") }
+        assertTrue(Harness.noGuidance(goal, loading, long))
+    }
+
     @Test fun endGuidanceOpensTheDrawerPressesEndAndConfirmsTheDrivingScreenIsGone() {
         fun items(v: ScreenView) = v.copy(elements = v.elements.map { e -> e.copy(kind = Kind.ITEM) })
         val goal = "길안내 종료해줘"

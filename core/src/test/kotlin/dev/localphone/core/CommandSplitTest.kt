@@ -11,6 +11,8 @@ class CommandSplitTest {
         assertEquals(listOf("음악 멈춰줘", "길안내 종료해줘"), CommandSplit.split("음악 멈추고 길안내 종료해줘"))
         assertEquals(listOf("늙은 사랑 틀어줘", "일요모임으로 안내해줘"), CommandSplit.split("늙은 사랑 틀어줘 그리고 일요모임으로 안내해줘"))
         assertEquals(listOf("클립스트림 열어줘", "더 크로스 틀어줘"), CommandSplit.split("클립스트림 열고 더 크로스 틀어줘"))
+        // A song named as an afterthought belongs to the play request.
+        assertEquals(listOf("집으로 안내해 줘", "자전거를 탄 풍경 틀어줘"), CommandSplit.split("집으로 안내해 주고 노래 틀어 줘 노래는 자전거를 탄 풍경"))
     }
 
     @Test fun chainedOrSingleCommandsStayWhole() {

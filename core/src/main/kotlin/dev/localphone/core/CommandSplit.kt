@@ -25,9 +25,16 @@ object CommandSplit {
             rest = rest.substring(m.range.last + 1).trim()
         }
         parts += rest
-        val steps = parts.map { it.trim() }.filter { it.isNotEmpty() }
+        val steps = parts.map { it.trim() }.filter { it.isNotEmpty() }.map(::foldAfterthought)
         if (steps.size < 2 || steps.size > 3) return null
         return steps.takeIf { it.all(::standsAlone) }
+    }
+
+    /** "노래 틀어 줘 노래는 자전거를 탄 풍경": the name said afterwards belongs to the request ("자전거를 탄 풍경 틀어줘"). */
+    fun foldAfterthought(part: String): String {
+        val m = Regex("^(.*?(?:틀어|재생해|들려)\\s*(?:줘|주세요))\\s+(?:노래|곡|음악)(?:은|는)\\s+(.+?)\\s*(?:이야|야|이요|요)?[.!]?$").matchEntire(part.trim())
+            ?: return part
+        return "${m.groupValues[2].trim()} 틀어줘"
     }
 
     /** A command the assistant can carry out without the others' screens. */

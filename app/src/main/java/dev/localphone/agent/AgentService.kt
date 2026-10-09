@@ -94,6 +94,8 @@ class AgentService : Service() {
             }
             a11y.onCancel = { if (id == runId) { job?.cancel(); finish("작업을 멈췄습니다.", speak = false, id = id) } }
             a11y.showStatus("“$goal”")
+            // Act only once the voice sheet is gone: under it the target app's window is not reachable.
+            a11y.awaitOwnWindowGone()
             val listener = object : AgentListener {
                 override fun progress(text: String) { if (id == runId) AgentAccessibilityService.instance?.showStatus(text) }
                 override fun needUser(text: String) { AgentAccessibilityService.instance?.showStatus(text); scope.launch { speaker.say(text) } }

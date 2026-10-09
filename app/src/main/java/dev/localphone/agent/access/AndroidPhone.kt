@@ -22,6 +22,14 @@ class AndroidPhone(private val context: Context) : Phone {
     override suspend fun observe(): Snapshot? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { service?.observe() }
 
     override suspend fun perform(view: ScreenView, action: AgentAction): Boolean {
+        if (performOnce(view, action)) return true
+        // Our own voice sheet was still on top, hiding the target window: once it is gone, act again.
+        val s = service ?: return false
+        if (s.ownWindowShowing() && s.awaitOwnWindowGone()) return performOnce(view, action)
+        return false
+    }
+
+    private suspend fun performOnce(view: ScreenView, action: AgentAction): Boolean {
         val s = service ?: return false
         val snap = view.snapshot
         fun node(id: Int) = view.element(id)?.node

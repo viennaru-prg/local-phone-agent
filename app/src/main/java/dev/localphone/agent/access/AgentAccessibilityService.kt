@@ -122,12 +122,38 @@ class AgentAccessibilityService : AccessibilityService() {
         packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
     }.getOrDefault(pkg)
 
+    /**
+     * Waits until this app's own voice sheet has left the screen. While it is on top the system lists
+     * only its window, so the first action of a run could not find its node again (23% of runs failed
+     * their first tap and had to retry).
+     */
+    suspend fun awaitOwnWindowGone(timeoutMs: Long = 1500): Boolean {
+        val deadline = android.os.SystemClock.uptimeMillis() + timeoutMs
+        while (android.os.SystemClock.uptimeMillis() < deadline) {
+            if (!ownWindowShowing()) return true
+            kotlinx.coroutines.delay(50)
+        }
+        Log.w(TAG, "own window still showing after ${timeoutMs}ms")
+        return false
+    }
+
+    private val voiceTitle: String? by lazy {
+        runCatching { packageManager.getActivityInfo(android.content.ComponentName(this, dev.localphone.agent.VoiceActivity::class.java), 0).loadLabel(packageManager).toString() }.getOrNull()
+    }
+
+    /** This app's voice sheet is an application window on screen (by package, or by its title when the root is hidden). */
+    fun ownWindowShowing(): Boolean = runCatching {
+        windows.any { w -> w.type == AccessibilityWindowInfo.TYPE_APPLICATION &&
+            (w.root?.packageName?.toString() == packageName || (voiceTitle != null && w.title?.toString() == voiceTitle)) }
+    }.getOrDefault(false)
+
     /** Re-finds the observed node in the live tree and checks it is still the same element. */
     private fun live(snapshot: Snapshot, index: Int): AccessibilityNodeInfo? {
         val expected = snapshot.nodes.getOrNull(index) ?: return null
-        val windowId = windowOf[snapshot] ?: return null
+        val windowId = windowOf[snapshot] ?: return null.also { Log.w(TAG, "live: snapshot has no window") }
         if (android.os.Build.VERSION.SDK_INT >= 33) clearCache()
-        val root = windows.firstOrNull { it.id == windowId }?.root ?: return null
+        val root = windows.firstOrNull { it.id == windowId }?.root
+            ?: return null.also { Log.w(TAG, "live: window $windowId gone; windows=${windows.joinToString { "${it.id}:${it.type}:${it.title}" }}") }
         fun same(n: AccessibilityNodeInfo) = n.className?.toString().orEmpty() == expected.className &&
             n.text?.toString().orEmpty() == expected.text && n.contentDescription?.toString().orEmpty() == expected.desc
         var current: AccessibilityNodeInfo? = root
@@ -139,7 +165,7 @@ class AgentAccessibilityService : AccessibilityService() {
         // The tree shifted between observing and acting (a driving map redraws lane views, a player
         // updates its status line). An unlabeled node cannot be re-identified; a labeled one that is
         // the only exact match in the same window is the same control.
-        if (expected.text.isBlank() && expected.desc.isBlank()) return null
+        if (expected.text.isBlank() && expected.desc.isBlank()) return null.also { Log.w(TAG, "live: unlabeled node moved (${expected.path})") }
         val found = mutableListOf<AccessibilityNodeInfo>()
         val queue = ArrayDeque(listOf(root)); var seen = 0
         while (queue.isNotEmpty() && seen < 800 && found.size < 2) {
@@ -147,6 +173,7 @@ class AgentAccessibilityService : AccessibilityService() {
             if (same(n)) found += n
             for (i in 0 until n.childCount) runCatching { n.getChild(i) }.getOrNull()?.let(queue::addLast)
         }
+        if (found.size != 1) Log.w(TAG, "live: '${expected.text}${expected.desc}' found ${found.size} times after the tree shifted")
         return found.singleOrNull()
     }
 
@@ -154,7 +181,9 @@ class AgentAccessibilityService : AccessibilityService() {
 
     suspend fun click(snapshot: Snapshot, index: Int, long: Boolean): Boolean {
         val node = live(snapshot, index) ?: return false
-        if (!node.isEnabled || !node.isVisibleToUser) { node.recycleCompat(); return false }
+        if (!node.isEnabled || !node.isVisibleToUser) {
+            Log.w(TAG, "click: node enabled=${node.isEnabled} visible=${node.isVisibleToUser}"); node.recycleCompat(); return false
+        }
         val action = if (long) AccessibilityNodeInfo.ACTION_LONG_CLICK else AccessibilityNodeInfo.ACTION_CLICK
         // The element itself, then the nearest ancestor that handles clicks (Compose/RecyclerView rows).
         var target: AccessibilityNodeInfo? = node

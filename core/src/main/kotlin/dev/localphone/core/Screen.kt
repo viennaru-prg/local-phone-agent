@@ -149,8 +149,13 @@ object ScreenCompactor {
         val unique = deduped.map { d ->
             if (d.label !in repeated) return@map d
             val b = nodes[d.node].bounds
-            val row = deduped.filter { t -> t.kind == Kind.TEXT && nodes[t.node].bounds.centerY in b.top..b.bottom && nodes[t.node].bounds.right <= b.right }
+            val texts = deduped.filter { t -> t.kind == Kind.TEXT && nodes[t.node].bounds.centerY in b.top..b.bottom && nodes[t.node].bounds.right <= b.right }
                 .sortedWith(compareBy({ nodes[it.node].bounds.top }, { nodes[it.node].bounds.left })).joinToString(" ") { it.label }
+            // No loose text beside it ("삭제" next to a row button that holds its own title): name it after that row.
+            val row = texts.ifBlank {
+                deduped.firstOrNull { r -> r !== d && r.label !in repeated && (r.kind == Kind.BUTTON || r.kind == Kind.ITEM) &&
+                    nodes[r.node].bounds.width * 2 >= snapshot.width && b.centerY in nodes[r.node].bounds.top..nodes[r.node].bounds.bottom }?.label.orEmpty()
+            }
             if (row.isBlank()) d else d.copy(label = "${d.label} · $row")
         }
         // A dense map can have scores of road labels above its bottom '안내 시작' control. Preserve

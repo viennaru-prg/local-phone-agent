@@ -16,12 +16,28 @@ object Harness {
 
     /** A lock / authentication screen (Secure Folder pattern, app PIN). Only the user may get past it. */
     /** A lock prompt is text on the screen ("패턴을 그리세요"); Settings lists "지문", "잠금 해제" as menu entries. */
-    fun authScreen(view: ScreenView): Boolean = !view.snapshot.packageName.startsWith("com.android.settings") &&
+    fun authScreen(view: ScreenView): Boolean = view.snapshot.packageName != "com.android.settings.intelligence" &&
+        // Secure Folder's own lock ("잠금해제 패턴을 그리세요") is drawn by the Settings package itself.
         view.elements.any { it.kind == Kind.TEXT && auth.containsMatchIn(it.label) }
+
+    /**
+     * "<앱> 열어줘" and the app's icon is on screen (Secure Folder's app list after unlocking): tap it.
+     * Names match across scripts ("클립스트림" ~ "Clipstream Player").
+     */
+    private fun openAppIcon(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
+        val name = DirectGoals.appName(goal) ?: GoalText.playSong(goal)?.let { AppProfiles.appFor("music") } ?: return null
+        if (view.snapshot.home || GoalText.normalize(view.snapshot.appLabel).contains(GoalText.normalize(name)) ||
+            GoalText.soundsLike(name, view.snapshot.appLabel)) return null
+        val icon = view.elements.filter { e -> e.enabled && (e.kind == Kind.ITEM || e.kind == Kind.BUTTON) &&
+            (GoalText.normalize(e.label) == GoalText.normalize(name) || GoalText.soundsLike(name, e.label)) }.singleOrNull() ?: return null
+        if (history.takeLast(2).any { it.action == "click \"${icon.label}\"" }) return null
+        return Auto(AgentAction.Click(icon.id), "'${icon.label}' 앱 아이콘")
+    }
 
     /** Returns an action to take without the model, or null to let the model decide. */
     fun preDecide(goal: String, view: ScreenView, history: List<HistoryLine> = emptyList()): Auto? {
         emptyScreen(view, history)?.let { return it }
+        openAppIcon(goal, view, history)?.let { return it }
         mediaControl(goal, view, history)?.let { return it }
         playlistAdd(goal, view, history)?.let { return it }
         playlistRemove(goal, view, history)?.let { return it }
@@ -143,88 +159,59 @@ object Harness {
      * button, then press the add button on the result row that names the song. The small model kept
      * pressing "재생목록 만들기" instead; these steps are the same in every player with a search box.
      */
-    private val endGuidanceLabel = Regex("^(?:길|경로)?안내\\s*종료$")
-    private val drivingControls = Regex("경로\\s*다시\\s*계산|reroute|(?:길|경로)?안내\\s*종료")
-
     /** "길안내 종료해줘", "안내 그만해", "내비 꺼줘". */
     fun isEndGuidance(goal: String): Boolean =
         Regex("(?:길\\s*안내|안내|내비(?:게이션)?|경로\\s*안내).{0,4}(?:종료|그만|꺼|끝내|멈춰|중지)").containsMatchIn(goal)
 
-    /** NAVER Map is in front without any driving controls and nothing was pressed: there is no guidance to end. */
-    fun noGuidance(goal: String, view: ScreenView, history: List<HistoryLine>): Boolean =
-        isEndGuidance(goal) && view.snapshot.packageName == NavigationSession.NAVER_MAP && view.elements.size >= 5 &&
-            view.elements.none { drivingControls.containsMatchIn(it.label) } && history.none { it.action.startsWith("click") }
+    /** The navigation app (profile role "navigation"); NAVER Map when no profile names one. */
+    fun navigationApp(): AppProfile = AppProfiles.forRole("navigation") ?: AppProfiles.forPackage(NavigationSession.NAVER_MAP)
 
-    /** Guidance was ended: 안내 종료 was pressed and the driving controls are gone. */
-    fun guidanceEnded(goal: String, view: ScreenView, history: List<HistoryLine>): Boolean =
-        isEndGuidance(goal) && history.any { h -> h.action.startsWith("click") && endGuidanceLabel.matches(Regex("\"(.*)\"").find(h.action)?.groupValues?.get(1)?.trim().orEmpty()) &&
-            h.outcome.contains("바뀜") } && view.elements.none { drivingControls.containsMatchIn(it.label) }
+    /** The navigation app is in front without any driving controls and nothing was pressed: there is no guidance to end. */
+    fun noGuidance(goal: String, view: ScreenView, history: List<HistoryLine>): Boolean {
+        val app = navigationApp()
+        return isEndGuidance(goal) && view.snapshot.packageName == app.packageName && view.elements.size >= 5 &&
+            view.elements.none { app.activeGuidanceRegex().containsMatchIn(it.label) } && history.none { it.action.startsWith("click") }
+    }
 
-    /** NAVER keeps 안내 종료 in the driving screen's drawer: open it, then press 안내 종료 (and its confirmation). */
+    /** Guidance was ended: its end control was pressed and the driving controls are gone. */
+    fun guidanceEnded(goal: String, view: ScreenView, history: List<HistoryLine>): Boolean {
+        val app = navigationApp()
+        return isEndGuidance(goal) && history.any { h -> h.action.startsWith("click") && h.outcome.contains("바뀜") &&
+            app.endGuidanceRegex().matches(Regex("\"(.*)\"").find(h.action)?.groupValues?.get(1)?.trim().orEmpty()) } &&
+            view.elements.none { app.activeGuidanceRegex().containsMatchIn(it.label) }
+    }
+
+    /** Ends guidance: open the navigation app if needed, press its end control (behind a menu if hidden), confirm. */
     private fun endGuidance(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
         if (!isEndGuidance(goal)) return null
-        val pressed = history.count { it.action.startsWith("click") && it.action.contains("종료") }
-        if (view.snapshot.packageName != NavigationSession.NAVER_MAP && pressed == 0 && history.none { it.action.startsWith("open_app") })
-            return Auto(AgentAction.OpenApp("네이버 지도"), "길안내는 네이버 지도에서 종료")
-        if (view.snapshot.home) return null
-        if (pressed >= 3) return null
-        view.elements.firstOrNull { it.enabled && it.kind != Kind.TEXT && endGuidanceLabel.matches(it.label.trim()) }?.let {
-            return Auto(AgentAction.Click(it.id), "안내 종료")
-        }
-        if (pressed > 0) view.elements.firstOrNull { it.enabled && it.kind != Kind.TEXT && Regex("^(?:종료|확인)$").matches(it.label.trim()) }?.let {
+        val app = navigationApp()
+        val ended = history.count { h -> h.action.startsWith("click") && app.endGuidanceRegex().matches(Regex("\"(.*)\"").find(h.action)?.groupValues?.get(1)?.trim().orEmpty()) }
+        if (view.snapshot.packageName != app.packageName && ended == 0 && history.none { it.action.startsWith("open_app") })
+            return app.names.firstOrNull()?.let { Auto(AgentAction.OpenApp(it), "길안내는 ${it}에서 종료") }
+        if (view.snapshot.home || ended >= 3) return null
+        if (ended > 0) view.elements.firstOrNull { it.enabled && it.kind != Kind.TEXT && Regex("^(?:종료|확인|예)$").matches(it.label.trim()) }?.let {
             return Auto(AgentAction.Click(it.id), "안내 종료 확인")
         }
-        if (view.elements.none { drivingControls.containsMatchIn(it.label) }) return null
-        if (history.takeLast(2).count { it.action.contains("drawer") || it.action.contains("메뉴") } >= 2) return null
-        return view.elements.firstOrNull { it.enabled && it.kind != Kind.TEXT && Regex("메뉴.*옵션|drawer", RegexOption.IGNORE_CASE).containsMatchIn(it.label) }
-            ?.let { Auto(AgentAction.Click(it.id), "안내 종료가 있는 메뉴 열기") }
+        if (ended == 0 && view.elements.none { app.activeGuidanceRegex().containsMatchIn(it.label) }) return null
+        return Skills.pressBehindMenu(app.endGuidanceRegex(), view, history, "안내 종료")
     }
 
-    /** The playlist row whose end (delete) icon was tapped for [query], if the tap changed the screen. */
-    fun removedRow(query: String, history: List<HistoryLine>): String? = history.asReversed().firstNotNullOfOrNull { h ->
-        val label = Regex("^click_end \"(.*)\"$").matchEntire(h.action)?.groupValues?.get(1) ?: return@firstNotNullOfOrNull null
-        label.takeIf { h.outcome.contains("바뀜") && GoalText.rowMatches(query, it) }
-    }
+    /** The playlist row a delete action was performed on for [query] (either way), if the screen changed. */
+    fun removedRow(query: String, history: List<HistoryLine>): String? = Skills.deletedRow(query, history)
 
-    /**
-     * "<노래> 재생목록에서 빼줘": find the playlist row naming the song (scrolling its list) and tap the
-     * delete icon at the row's end. ClipStream draws that icon inside the row button without a node.
-     */
+    /** "<노래> 재생목록에서 빼줘": find the row naming the song and delete it the way this app deletes rows. */
     private fun playlistRemove(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
         val query = GoalText.playlistRemove(goal) ?: return null
         if (view.snapshot.home || removedRow(query, history) != null) return null
-        val wanted = query.trim().split(Regex("\\s+")).size
-        fun isRow(e: Element) = (e.kind == Kind.BUTTON || e.kind == Kind.ITEM) && e.enabled && !e.label.contains(" · ") &&
-            e.bounds.width * 2 >= view.snapshot.width && e.bounds.height >= 80
-        val rows = view.elements.filter(::isRow)
-        fun area(e: Element) = e.bounds.width.toLong() * e.bounds.height
-        // The innermost list around a row is the one that scrolls it (the page itself scrolls too).
-        fun box(row: Element) = view.lists.filter { l -> row.bounds.centerY in l.bounds.top..l.bounds.bottom &&
-            row.bounds.centerX in l.bounds.left..l.bounds.right }.minByOrNull(::area)
-        val scrolls = history.count { it.action.startsWith("scroll") }
-        val stuck = history.lastOrNull()?.let { it.action.startsWith("scroll") && it.outcome.startsWith("변화 없음") } == true
-        rows.filter { GoalText.rowMatches(query, it.label) }.maxByOrNull { GoalText.rowScore(query, it.label) }?.let { row ->
-            val list = box(row)
-            // Half hidden under the mini player: the end of the row may be another control. Move it into view first.
-            if (list != null && (row.bounds.top < list.bounds.top || row.bounds.bottom > list.bounds.bottom)) {
-                if (scrolls >= 6 || stuck) return null
-                return Auto(AgentAction.Scroll(if (row.bounds.centerY > list.bounds.centerY) ScrollDir.DOWN else ScrollDir.UP, list.id),
-                    "'${row.label.take(20)}' 줄이 잘려 보여 목록을 움직임")
-            }
-            if (history.count { it.action == "click_end \"${row.label}\"" } >= 2) return null
-            return Auto(AgentAction.TapEnd(row.id), "재생목록의 '${row.label.take(30)}' 줄 끝 삭제 아이콘")
+        return when (val found = Skills.findRow(query, view, history, maxScrolls = 6)) {
+            is Skills.Found.Row -> Skills.deleteRow(AppProfiles.forPackage(view.snapshot.packageName), view, found.row, history)
+            is Skills.Found.Move -> found.auto
+            Skills.Found.Missing -> null
         }
-        // Not visible: scroll the innermost list holding playlist rows, a few times at most.
-        if (scrolls >= 6 || stuck) return null
-        val list = rows.mapNotNull(::box).minByOrNull(::area) ?: return null
-        return Auto(AgentAction.Scroll(ScrollDir.DOWN, list.id), "재생목록에서 '$query' 찾기")
     }
 
     private fun playlistAdd(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? =
         GoalText.playlistAdd(goal)?.let { addFlow(it, GoalText.playlistAddCount(goal), view, history) }
-
-    private fun isTrackRow(view: ScreenView, e: Element) = (e.kind == Kind.BUTTON || e.kind == Kind.ITEM) && e.enabled &&
-        !e.label.contains(" · ") && e.bounds.width * 2 >= view.snapshot.width && e.bounds.height >= 80
 
     /** A music player screen: its previous/next and play/pause controls are on it. */
     fun isPlayer(view: ScreenView): Boolean {
@@ -258,38 +245,25 @@ object Harness {
     private fun playSong(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
         val query = GoalText.playSong(goal) ?: return null
         if (!isPlayer(view) || nowPlaying(query, view)) return null
-        // The player bar updates a moment after the row's second tap: wait for it instead of asking the model.
+        // The player bar updates a moment after the row is played: wait for it instead of asking the model.
         val lastTap = history.lastOrNull { it.action != "wait" }
-        if (lastTap != null && lastTap.action.startsWith("double_tap") && !lastTap.outcome.startsWith("실행 실패")) {
-            if (history.takeLast(3).count { it.action == "wait" } < 3) return Auto(AgentAction.Wait, "재생 막대가 바뀔 때까지 기다림")
+        if (lastTap != null && (lastTap.action.startsWith("double_tap") || (lastTap.action.startsWith("click \"") && GoalText.rowMatches(query, lastTap.action))) &&
+            !lastTap.outcome.startsWith("실행 실패")) {
+            // Up to three short waits; then a single tap that only selected the row escalates (Skills.playRow).
+            if (history.takeLastWhile { it.action == "wait" }.size < 3) return Auto(AgentAction.Wait, "재생 막대가 바뀔 때까지 기다림")
         }
         // Selected but paused: press play.
         if (barTitle(query, view)) view.elements.firstOrNull { it.enabled && playLabel.matches(it.label.trim()) }
             ?.takeIf { b -> history.takeLast(2).none { it.action == "click \"${b.label}\"" } }
             ?.let { return Auto(AgentAction.Click(it.id), "고른 곡이 멈춰 있어 재생") }
-        fun area(e: Element) = e.bounds.width.toLong() * e.bounds.height
-        fun box(row: Element) = view.lists.filter { l -> row.bounds.centerY in l.bounds.top..l.bounds.bottom &&
-            row.bounds.centerX in l.bounds.left..l.bounds.right }.minByOrNull(::area)
-        val rows = view.elements.filter { isTrackRow(view, it) }
         // Scrolls since the last add: the added song lands at the end of the playlist.
         val since = history.indexOfLast { h -> addLabel.containsMatchIn(h.action.substringBefore(" · ")) && h.action.startsWith("click") } + 1
-        val scrolls = history.drop(since).filter { it.action.startsWith("scroll") }
-        rows.filter { GoalText.rowMatches(query, it.label) }.maxByOrNull { GoalText.rowScore(query, it.label) }?.let { row ->
-            val list = box(row)
-            if (list != null && (row.bounds.top < list.bounds.top || row.bounds.bottom > list.bounds.bottom) && scrolls.size < 12)
-                return Auto(AgentAction.Scroll(if (row.bounds.centerY > list.bounds.centerY) ScrollDir.DOWN else ScrollDir.UP, list.id),
-                    "'${row.label.take(20)}' 줄이 잘려 보여 목록을 움직임")
-            if (history.count { it.action == "double_tap \"${row.label}\"" } >= 2) return null
-            return Auto(AgentAction.DoubleTap(row.id), "재생목록의 '${row.label.take(30)}' 재생 (첫 탭 선택, 두 번째 탭 재생)")
+        return when (val found = Skills.findRow(query, view, history, since)) {
+            is Skills.Found.Row -> Skills.playRow(AppProfiles.forPackage(view.snapshot.packageName), found.row, history)
+            is Skills.Found.Move -> found.auto
+            // Not in the playlist: search and add it, then it is played from the playlist.
+            Skills.Found.Missing -> if (addedRows(query, history).isNotEmpty()) null else addFlow(query, 1, view, history)
         }
-        // Not on screen: look down the playlist, then up, then search and add it.
-        val list = rows.mapNotNull(::box).minByOrNull(::area)
-        val downDone = scrolls.any { it.action.startsWith("scroll down") && it.outcome.startsWith("변화 없음") }
-        val upDone = scrolls.any { it.action.startsWith("scroll up") && it.outcome.startsWith("변화 없음") }
-        if (list != null && scrolls.size < 12 && !(downDone && upDone))
-            return Auto(AgentAction.Scroll(if (downDone) ScrollDir.UP else ScrollDir.DOWN, list.id), "재생목록에서 '$query' 찾기")
-        if (addedRows(query, history).isNotEmpty()) return null
-        return addFlow(query, 1, view, history)
     }
 
     private fun addFlow(query: String, count: Int, view: ScreenView, history: List<HistoryLine>): Auto? {

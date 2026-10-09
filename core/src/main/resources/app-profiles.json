@@ -1,0 +1,20 @@
+{
+  "_comment": "App knowledge as data. Code holds generic skills (find a row, act on it, find a control behind a menu); a profile only names what differs per app. Apps without a profile use the generic defaults and learn (rowPlay, rowDelete) from what worked.",
+  "apps": [
+    {
+      "package": "com.nhn.android.nmap",
+      "names": ["네이버 지도", "네이버지도", "naver map"],
+      "roles": ["navigation"],
+      "routeEntry": "길찾기",
+      "activeGuidance": "경로\\s*다시\\s*계산|reroute|(?:길|경로)?안내\\s*종료",
+      "endGuidance": "^(?:길|경로)?안내\\s*종료$"
+    },
+    {
+      "package": "local.clipstream.player",
+      "names": ["클립스트림", "Clipstream Player"],
+      "roles": ["music"],
+      "rowPlay": "double_tap",
+      "rowDelete": "trailing_icon"
+    }
+  ]
+}

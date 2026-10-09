@@ -54,8 +54,8 @@ class AgentConfig(
     val unlockWaitMs: Long = 45_000,
     /** Ask the model for a short reasoning note before each action (slower, sometimes more accurate). */
     val withNote: Boolean = true,
-    /** The player used for "<곡> 틀어줘" when the command names no app (the user's ClipStream in Secure Folder). */
-    val musicApp: String = "클립스트림",
+    /** The player for "<곡> 틀어줘" when the command names none; null = the app profile with role "music". */
+    val musicApp: String? = null,
 )
 
 /**
@@ -109,7 +109,12 @@ class Agent(
     private suspend fun verify(goal: String, run: Run, view: ScreenView, answer: String = ""): Verdict {
         mediaEvidence(goal, run)?.let { return Verdict(true, it) }
         playlistEvidence(goal, run, view)?.let { return Verdict(true, it) }
-        GoalText.playSong(goal)?.let { q -> if (Harness.nowPlaying(q, view) && phone.musicActive() != false) return Verdict(true, "$q 노래를 틀었어요.") }
+        GoalText.playSong(goal)?.let { q ->
+            if (Harness.nowPlaying(q, view) && phone.musicActive() != false) {
+                Skills.learnFrom(view.snapshot.packageName, run.history, q)
+                return Verdict(true, "$q 노래를 틀었어요.")
+            }
+        }
         if (Harness.guidanceEnded(goal, view, run.history)) return Verdict(true, "길안내를 종료했어요.")
         if (Router.mediaKeyIn(goal) != null && phone.musicActive() != null) return Verdict(false, "음악 상태가 아직 요청과 다름")
         navigation?.let {
@@ -164,7 +169,9 @@ class Agent(
         val query = GoalText.playlistRemove(goal) ?: return null
         // Removed = the row whose end icon was tapped is no longer on screen.
         val row = Harness.removedRow(query, run.history) ?: return null
-        return if (view.elements.none { it.label == row }) "${obj(query)} 재생목록에서 뺐어요." else null
+        if (view.elements.any { it.label == row }) return null
+        Skills.learnDelete(view.snapshot.packageName, run.history)
+        return "${obj(query)} 재생목록에서 뺐어요."
     }
 
     private fun mediaEvidence(goal: String, run: Run): String? {
@@ -221,9 +228,10 @@ class Agent(
             } else run.history += HistoryLine("open_app \"$app\"", "이미 요청한 앱이 전면에 있음")
         }
         // "늙은 사랑 틀어줘" names no app: songs are played in the user's player.
-        if (GoalText.playSong(goal) != null && GoalText.namedApp(goal) == null && !Harness.isPlayer(view) && !appInFront(view, config.musicApp)) {
-            val (outcome, next) = execute(run, AgentAction.OpenApp(config.musicApp), view)
-            listener.step(StepRecord(0, "android_api", "", "", "open_app \"${config.musicApp}\"", outcome, "곡 재생은 음악 앱에서", 0, phone.now() - started))
+        val musicApp = config.musicApp ?: AppProfiles.appFor("music")
+        if (musicApp != null && GoalText.playSong(goal) != null && GoalText.namedApp(goal) == null && !Harness.isPlayer(view) && !appInFront(view, musicApp)) {
+            val (outcome, next) = execute(run, AgentAction.OpenApp(musicApp), view)
+            listener.step(StepRecord(0, "android_api", "", "", "open_app \"$musicApp\"", outcome, "곡 재생은 음악 앱에서", 0, phone.now() - started))
             view = next
         }
 
@@ -252,6 +260,7 @@ class Agent(
             }
             GoalText.playSong(goal)?.takeIf { q -> Harness.nowPlaying(q, view) && phone.musicActive() != false }?.let { q ->
                 listener.step(StepRecord(index, "harness", view.render(), "", "verify", "완료", "재생 막대의 곡 제목과 재생 상태 확인", 0, phone.now() - started))
+                Skills.learnFrom(view.snapshot.packageName, run.history, q)
                 return finish(run, goal, "$q 노래를 틀었어요.")
             }
             playlistEvidence(goal, run, view)?.let { say ->
@@ -298,6 +307,8 @@ class Agent(
                 for (attempt in 1..10) {
                     delay(250)
                     val fresh = phone.observe()?.let { ScreenCompactor.compact(it, goal, run.focus) } ?: continue
+                    // Judge the fresh screen itself: the session's state must not come from the splash before it.
+                    navigation?.observe(fresh)
                     if ((navigation?.nextAction(fresh, phone.now()) ?: Harness.preDecide(goal, fresh, run.history)) != null) { ready = fresh; break }
                 }
                 if (ready != null) { view = ready; continue }

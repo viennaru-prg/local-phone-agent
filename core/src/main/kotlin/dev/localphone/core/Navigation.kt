@@ -7,7 +7,11 @@ import kotlinx.coroutines.ensureActive
 data class NavigationEvidence(val complete: Boolean, val state: String, val reason: String)
 
 /** Per-command proof: destination selection → route preview → actual guidance, never ETA alone. */
-class NavigationSession(val goal: String, private val names: List<String>) {
+/**
+ * [app] says what differs in the navigation app (its package, the control that lists home/work/frequent
+ * places, the controls shown only while guiding); the steps themselves are generic.
+ */
+class NavigationSession(val goal: String, private val names: List<String>, private val app: AppProfile = Harness.navigationApp()) {
     /** What the assistant says once guidance is verified: "회사로 안내를 시작했어요." */
     val spokenStart: String get() = names.firstOrNull()?.takeIf { it.isNotBlank() }?.let { name ->
         val c = name.last()
@@ -28,6 +32,8 @@ class NavigationSession(val goal: String, private val names: List<String>) {
     private var lastStartAt = Long.MIN_VALUE / 2
     private var plainStartAt: Long? = null
     private val resolvedScreens = mutableSetOf<Int>()
+    /** The route entry (길찾기) was opened: sideways lists from here on hold places. */
+    private var targetSearchOpened = false
     var evidence = NavigationEvidence(false, "UNRESOLVED", "목적지를 아직 확인하지 못함"); private set
 
     fun beforeDispatch(view: ScreenView?) { initialSignature = view?.signature; dispatched = true }
@@ -52,7 +58,7 @@ class NavigationSession(val goal: String, private val names: List<String>) {
     fun observe(view: ScreenView): NavigationEvidence {
         fun result(state: String, reason: String, done: Boolean = false): NavigationEvidence =
             NavigationEvidence(done, state, reason).also { evidence = it }
-        if (view.snapshot.packageName != NAVER_MAP) return result("OTHER_APP", "네이버 지도 화면이 아님")
+        if (view.snapshot.packageName != app.packageName) return result("OTHER_APP", "내비게이션 앱 화면이 아님")
         val labels = view.elements.map { it.label }
         if (Harness.authScreen(view) || labels.any {
             Regex("이어서.*(?:받으|안내)|이전.*(?:안내|경로)|경로.*하시겠|안내.*할까요").containsMatchIn(it)
@@ -73,10 +79,8 @@ class NavigationSession(val goal: String, private val names: List<String>) {
             if (destinationBound) previewSeen = true
             return result("PREVIEW", if (destinationBound) "목적지 확인됨; 안내 시작 전" else "경로는 보이지만 목적지 확인이 필요함")
         }
-        val active = labels.any {
-            // NAVER's driving screen itself shows no "안내 중" text, only its reroute / drawer controls.
-            Regex("(?:길|경로)?안내\\s*종료|경로\\s*안내\\s*중|주행\\s*중|경로\\s*안내를\\s*시작합니다|경로\\s*다시\\s*계산|reroute").containsMatchIn(it)
-        }
+        // A driving screen may show no "안내 중" text, only controls that exist while guiding (profile).
+        val active = labels.any { app.activeGuidanceRegex().containsMatchIn(it) || drivingText.containsMatchIn(it) }
         if (!active) return result("UNCONFIRMED", "실제 안내 화면 증거 없음 (도착 예정·남은 거리만으로 완료하지 않음)")
         if (targetVisible && (!dispatched || changedAfterDispatch)) destinationBound = true
         if (!destinationBound || (!previewSeen && !targetVisible))
@@ -87,17 +91,13 @@ class NavigationSession(val goal: String, private val names: List<String>) {
     }
 
     fun nextAction(view: ScreenView, now: Long): Harness.Auto? {
-        if (view.snapshot.packageName != NAVER_MAP) return null
+        if (view.snapshot.packageName != app.packageName) return null
         if (!preview(view)) {
             // Guidance from before this command (its destination is not shown as "회사"): end it from the
             // drawer and start the requested route the normal way. Never for the route this run started.
             if (evidence.state in setOf("ACTIVE_UNBOUND", "WRONG_DESTINATION", "STALE_GUIDANCE") && !targetPicked && !previewSeen && endSteps < 4) {
-                view.elements.firstOrNull { it.enabled && it.kind != Kind.TEXT && Regex("^(?:길|경로)?안내\\s*종료$").matches(it.label.trim()) }?.let {
-                    endSteps++; return Harness.Auto(AgentAction.Click(it.id), "이번 목적지로 확인되지 않는 이전 안내를 끝내고 새로 시작")
-                }
-                view.elements.firstOrNull { it.enabled && it.kind != Kind.TEXT && Regex("메뉴.*옵션|drawer", RegexOption.IGNORE_CASE).containsMatchIn(it.label) }?.let {
-                    endSteps++; return Harness.Auto(AgentAction.Click(it.id), "안내 종료 메뉴 열기")
-                }
+                Skills.pressBehindMenu(app.endGuidanceRegex(), view, emptyList(), "이번 목적지로 확인되지 않는 이전 안내를 끝내고 새로 시작")
+                    ?.let { endSteps++; return it }
             }
             // "안내를 종료할까요?" after our own 안내 종료.
             if (evidence.state == "PROMPT" && endSteps > 0 && endSteps < 5) view.elements.firstOrNull {
@@ -110,18 +110,19 @@ class NavigationSession(val goal: String, private val names: List<String>) {
             val target = hits.filter { e -> names.any { GoalText.normalize(e.label) == GoalText.normalize(it) } }.singleOrNull()
                 ?: hits.singleOrNull()
             if (target != null) return Harness.Auto(AgentAction.Click(target.id), "현재 지도에서 요청한 목적지 항목이 하나로 확인됨")
-            // The frequent places carousel (집, 회사, 수요모…, 일요모…) shows four at a time: page through it.
-            if (hits.isEmpty() && !targetPicked) view.lists.firstOrNull { Regex("frequent", RegexOption.IGNORE_CASE).containsMatchIn(it.label) }?.let { carousel ->
+            // Home/work and frequent destinations are listed behind the app's route entry (NAVER: 길찾기):
+            // open it first. The map's own sideways lists (category chips) are not places.
+            if (hits.isEmpty() && !targetPicked) app.routeEntry?.let { entry -> view.elements.singleOrNull {
+                it.enabled && it.kind != Kind.TEXT && GoalText.normalize(it.label) == GoalText.normalize(entry)
+            } }?.let { return Harness.Auto(AgentAction.Click(it.id), "${it.label}의 집·회사·자주 가는 곳을 먼저 확인") }
+            // A sideways list of places (NAVER: 집, 회사, 수요모…, 일요모…) shows a few at a time: page through it.
+            if (hits.isEmpty() && !targetPicked) placeCarousel(view)?.let { carousel ->
                 if (carouselSignature == view.signature) carouselEnd = true // the last scroll moved nothing
                 if (!carouselEnd && carouselScrolls < 5) {
                     carouselScrolls++; carouselSignature = view.signature
                     return Harness.Auto(AgentAction.Scroll(ScrollDir.RIGHT, carousel.id), "자주 가는 곳 목록을 넘겨 '${names.first()}' 찾기")
                 }
             }
-            // NAVER's home/work and frequent destinations live in route selection, not only Favorites.
-            if (hits.isEmpty() && !targetPicked) view.elements.singleOrNull {
-                it.enabled && it.kind != Kind.TEXT && GoalText.normalize(it.label) == "길찾기"
-            }?.let { return Harness.Auto(AgentAction.Click(it.id), "길찾기의 집·회사·자주 가는 곳을 먼저 확인") }
             return null
         }
         if (!destinationBound) return null
@@ -144,10 +145,12 @@ class NavigationSession(val goal: String, private val names: List<String>) {
     } == true
 
     fun recordAction(view: ScreenView, action: AgentAction, accepted: Boolean, now: Long) {
-        if (view.snapshot.packageName != NAVER_MAP) return
+        if (view.snapshot.packageName != app.packageName) return
         if (action is AgentAction.Click) {
             val label = view.element(action.id)?.label.orEmpty()
-            if (matches(label) || GoalText.normalize(label) == "길찾기") resolvedScreens += view.signature
+            val entry = app.routeEntry?.let { GoalText.normalize(label) == GoalText.normalize(it) } == true
+            if (matches(label) || entry) resolvedScreens += view.signature
+            if (accepted && entry) targetSearchOpened = true
             if (accepted && matches(label)) targetPicked = true
             if (isStart(label)) { startAttempts++; lastStartAt = now }
         }
@@ -155,7 +158,19 @@ class NavigationSession(val goal: String, private val names: List<String>) {
             view.element(action.id)?.label?.contains("출발") != true) targetPicked = true
     }
 
+    /** A sideways list holding clickable places: NAVER names it "v frequents recycler view"; any wide, short list counts. */
+    private fun placeCarousel(view: ScreenView): Element? = view.lists.firstOrNull { l ->
+        Regex("frequent|favorite|즐겨", RegexOption.IGNORE_CASE).containsMatchIn(l.label)
+    } ?: view.lists.firstOrNull { l ->
+        // By shape only after the route entry was opened (the map screen's category chips are sideways too).
+        targetSearchOpened && (l.bounds.width >= l.bounds.height * 3 && view.elements.count { e ->
+                e.kind != Kind.TEXT && e.kind != Kind.LIST && e.bounds.centerY in l.bounds.top..l.bounds.bottom &&
+                    e.bounds.centerX in l.bounds.left..l.bounds.right
+            } >= 2)
+    }
+
     companion object {
+        private val drivingText = Regex("경로\\s*안내\\s*중|주행\\s*중|경로\\s*안내를\\s*시작합니다")
         const val NAVER_MAP = "com.nhn.android.nmap"
         fun forGoal(goal: String, place: Place? = null): NavigationSession? {
             if (!Router.isNavigationGoal(goal) || !Router.usesNaver(goal)) return null

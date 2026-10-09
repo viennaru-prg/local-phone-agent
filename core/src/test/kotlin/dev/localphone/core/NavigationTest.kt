@@ -73,6 +73,22 @@ class NavigationTest {
         assertEquals("수원집", second.element(click.id)?.label)
     }
 
+    @Test fun theMapsCategoryChipsAreNotPagedBeforeTheRouteEntryIsOpened() {
+        val s = NavigationSession.forGoal("수원 집으로 안내해 줘")!!
+        val nodes = mutableListOf(
+            RawNode("r", -1, bounds = Bounds(0, 0, 1000, 2000)),
+            RawNode("r.0", 0, text = "길찾기", clickable = true, bounds = Bounds(700, 100, 900, 180)),
+            RawNode("r.1", 0, scrollable = true, bounds = Bounds(0, 250, 1000, 330)), // 은행 · 포장주문 · 응급진료 chips
+        )
+        listOf("은행", "포장주문", "응급진료", "쿠폰").forEachIndexed { i, c ->
+            nodes += RawNode("r.1.$i", 2, text = c, clickable = true, bounds = Bounds(i * 250, 250, i * 250 + 240, 330))
+        }
+        val map = ScreenCompactor.compact(Snapshot(NavigationSession.NAVER_MAP, "네이버지도", nodes, 1000, 2000))
+        s.observe(map)
+        val action = s.nextAction(map, 0)?.action as AgentAction.Click
+        assertEquals("길찾기", map.element(action.id)?.label)
+    }
+
     @Test fun aCutNameInTheCarouselStillMatches() {
         val s = NavigationSession.forGoal("수요모임으로 안내해줘")!!
         val v = frequents("집", "회사", "수요모…", "일요모…")

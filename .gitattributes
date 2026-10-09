@@ -1,6 +1,11 @@
-* text=auto eol=lf
+* text=auto
+*.kt text eol=lf
+*.kts text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.ps1 text eol=crlf
 *.bat text eol=crlf
-*.jar binary
-*.wav binary
-*.onnx binary
-*.aar binary
+gradlew text eol=lf

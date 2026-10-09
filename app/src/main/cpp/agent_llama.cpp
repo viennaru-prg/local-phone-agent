@@ -1,194 +1,198 @@
 #include <jni.h>
 #include <llama.h>
-#include <atomic>
+#include <android/log.h>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <chrono>
+
+#define LOG(...) __android_log_print(ANDROID_LOG_INFO, "AgentLlama", __VA_ARGS__)
 
 struct Runtime {
     llama_model * model = nullptr;
     llama_context * context = nullptr;
+    int n_ctx = 0;
     std::atomic<bool> cancelled{false};
     std::chrono::steady_clock::time_point deadline;
-    int64_t timing[5] = {}; // prompt, reused input, output, prefill ms, generation ms
-    // Computed KV only, never a response cache. Changed user/screen tokens are removed.
-    std::vector<llama_token> previous_input;
+    // prompt tokens, reused prefix tokens, generated tokens, prefill ms, generation ms
+    int64_t timing[5] = {};
+    // Tokens currently held in the KV cache. A new prompt reuses the shared prefix (system prompt,
+    // goal, history) and only decodes the changed tail (the new screen).
+    std::vector<llama_token> cached;
     ~Runtime() { if (context) llama_free(context); if (model) llama_model_free(model); }
 };
-static bool abort_generation(void * data) {
-    auto * runtime = static_cast<Runtime *>(data);
-    return runtime->cancelled.load() || std::chrono::steady_clock::now() >= runtime->deadline;
+
+static bool should_abort(void * data) {
+    auto * rt = static_cast<Runtime *>(data);
+    return rt->cancelled.load() || std::chrono::steady_clock::now() >= rt->deadline;
 }
-static void check_running(Runtime * runtime) {
-    if (runtime->cancelled.load()) throw std::runtime_error("Inference cancelled");
-    if (std::chrono::steady_clock::now() >= runtime->deadline)
-        throw std::runtime_error("Qwen inference time limit reached; no incomplete plan executed");
+static void check(Runtime * rt) {
+    if (rt->cancelled.load()) throw std::runtime_error("cancelled");
+    if (std::chrono::steady_clock::now() >= rt->deadline) throw std::runtime_error("inference timeout");
 }
-// End as soon as the grammar has generated a complete JSON root. Waiting for EOG
-// can waste the output budget on trailing whitespace or reject a valid finished plan.
-static bool complete_json(const std::string & value) {
+// Stop as soon as the grammar produced one complete JSON object (after any <think> block).
+static bool complete_json(const std::string & all) {
+    if (all.rfind("<think>", 0) == 0 && all.find("</think>") == std::string::npos) return false;
+    const auto end_think = all.find("</think>");
+    const std::string s = end_think == std::string::npos ? all : all.substr(end_think + 8);
     int depth = 0; bool quoted = false, escaped = false, started = false;
-    for (char ch : value) {
-        if (quoted) {
-            if (escaped) escaped = false;
-            else if (ch == '\\') escaped = true;
-            else if (ch == '"') quoted = false;
-        } else if (ch == '"') quoted = true;
-        else if (ch == '{' || ch == '[') { ++depth; started = true; }
-        else if (ch == '}' || ch == ']') { if (--depth == 0 && started) return true; }
+    for (char c : s) {
+        if (quoted) { if (escaped) escaped = false; else if (c == '\\') escaped = true; else if (c == '"') quoted = false; }
+        else if (c == '"') quoted = true;
+        else if (c == '{' || c == '[') { ++depth; started = true; }
+        else if (c == '}' || c == ']') { if (--depth == 0 && started) return true; }
     }
     return false;
 }
-static void fail(JNIEnv * env, const std::exception & failure) {
-    env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), failure.what());
-}
-static std::string bytes(JNIEnv * env, jbyteArray value) {
-    std::string out(env->GetArrayLength(value), '\0');
-    env->GetByteArrayRegion(value, 0, out.size(), reinterpret_cast<jbyte *>(out.data()));
+static std::string bytes(JNIEnv * env, jbyteArray v) {
+    std::string out(env->GetArrayLength(v), '\0');
+    env->GetByteArrayRegion(v, 0, out.size(), reinterpret_cast<jbyte *>(out.data()));
     return out;
 }
+static void throw_java(JNIEnv * env, const std::exception & e) {
+    env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), e.what());
+}
+
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_localphone_agent_runtime_LlamaNative_load(JNIEnv * env, jobject, jstring path, jint threads) {
+Java_dev_localphone_agent_llm_LlamaNative_load(JNIEnv * env, jobject, jstring path, jint threads, jint n_ctx, jint gpu_layers) {
     try {
-        static std::once_flag initialized;
-        std::call_once(initialized, [] { llama_backend_init(); });
-        auto runtime = std::make_unique<Runtime>();
-        runtime->deadline = std::chrono::steady_clock::time_point::max();
-        const char * location = env->GetStringUTFChars(path, nullptr);
-        auto params = llama_model_default_params();
-        params.n_gpu_layers = 0;
-        params.load_mode = LLAMA_LOAD_MODE_MMAP;
-        runtime->model = llama_model_load_from_file(location, params);
-        env->ReleaseStringUTFChars(path, location);
-        if (!runtime->model) throw std::runtime_error("Qwen GGUF model initialization failed");
-        auto context_params = llama_context_default_params();
-        context_params.n_ctx = 4096;
-        context_params.n_batch = 512;
-        context_params.n_ubatch = 128;
-        context_params.n_threads = threads;
-        context_params.n_threads_batch = threads;
-        context_params.offload_kqv = false;
-        context_params.op_offload = false;
-        context_params.abort_callback = abort_generation;
-        context_params.abort_callback_data = runtime.get();
-        runtime->context = llama_init_from_model(runtime->model, context_params);
-        if (!runtime->context) throw std::runtime_error("Qwen context initialization failed");
-        return reinterpret_cast<jlong>(runtime.release());
-    } catch (const std::exception & error) { fail(env, error); return 0; }
+        static std::once_flag once;
+        std::call_once(once, [] { llama_backend_init(); });
+        auto rt = std::make_unique<Runtime>();
+        rt->deadline = std::chrono::steady_clock::time_point::max();
+        const char * p = env->GetStringUTFChars(path, nullptr);
+        auto mp = llama_model_default_params();
+        mp.n_gpu_layers = gpu_layers;
+        mp.load_mode = LLAMA_LOAD_MODE_MMAP;
+        rt->model = llama_model_load_from_file(p, mp);
+        env->ReleaseStringUTFChars(path, p);
+        if (!rt->model) throw std::runtime_error("GGUF model load failed");
+        auto cp = llama_context_default_params();
+        cp.n_ctx = n_ctx;
+        // Smaller batches shrink the GPU compute buffer (it scales with n_ubatch); prompts are only ~1-2k tokens.
+        cp.n_batch = 256;
+        cp.n_ubatch = 256;
+        cp.n_threads = threads;
+        cp.n_threads_batch = threads;
+        cp.abort_callback = should_abort;
+        cp.abort_callback_data = rt.get();
+        rt->context = llama_init_from_model(rt->model, cp);
+        if (!rt->context) throw std::runtime_error("context init failed");
+        rt->n_ctx = n_ctx;
+        LOG("loaded model, ctx=%d threads=%d gpu_layers=%d devices=%zu", n_ctx, threads, gpu_layers, ggml_backend_dev_count());
+        return reinterpret_cast<jlong>(rt.release());
+    } catch (const std::exception & e) { throw_java(env, e); return 0; }
 }
+
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_dev_localphone_agent_runtime_LlamaNative_infer(JNIEnv * env, jobject, jlong handle, jbyteArray prompt, jint limit, jbyteArray grammar, jlong timeout_ms, jbyteArray snapshot_path) {
-    auto * runtime = reinterpret_cast<Runtime *>(handle);
+Java_dev_localphone_agent_llm_LlamaNative_infer(JNIEnv * env, jobject, jlong handle, jbyteArray prompt_bytes,
+                                                jint max_tokens, jbyteArray grammar_bytes, jlong timeout_ms) {
+    auto * rt = reinterpret_cast<Runtime *>(handle);
     try {
-        if (!runtime) throw std::runtime_error("Qwen is unloaded");
-        const auto started = std::chrono::steady_clock::now();
-        runtime->deadline = started + std::chrono::milliseconds(timeout_ms);
-        std::fill(std::begin(runtime->timing), std::end(runtime->timing), 0);
-        check_running(runtime);
-        const auto * vocab = llama_model_get_vocab(runtime->model);
-        const std::string input = bytes(env, prompt);
-        int count = -llama_tokenize(vocab, input.data(), input.size(), nullptr, 0, false, true);
-        if (count <= 0 || count + limit > 4096) throw std::runtime_error("Qwen context limit exceeded");
-        std::vector<llama_token> tokens(count);
-        count = llama_tokenize(vocab, input.data(), input.size(), tokens.data(), tokens.size(), false, true);
-        if (count <= 0) throw std::runtime_error("Qwen tokenization failed");
+        if (!rt) throw std::runtime_error("model not loaded");
+        const auto t0 = std::chrono::steady_clock::now();
+        rt->deadline = t0 + std::chrono::milliseconds(timeout_ms);
+        std::fill(std::begin(rt->timing), std::end(rt->timing), 0);
+        const auto * vocab = llama_model_get_vocab(rt->model);
+        const std::string prompt = bytes(env, prompt_bytes);
+        int n = -llama_tokenize(vocab, prompt.data(), prompt.size(), nullptr, 0, false, true);
+        if (n <= 0 || n + max_tokens > rt->n_ctx) throw std::runtime_error("prompt too long for context");
+        std::vector<llama_token> tokens(n);
+        if (llama_tokenize(vocab, prompt.data(), prompt.size(), tokens.data(), n, false, true) != n)
+            throw std::runtime_error("tokenize failed");
+
         int common = 0;
-        while (common < count - 1 && common < static_cast<int>(runtime->previous_input.size()) &&
-               tokens[common] == runtime->previous_input[common]) ++common;
-        auto * memory = llama_get_memory(runtime->context);
-        if (common == 0 || !llama_memory_seq_rm(memory, -1, common, -1)) {
-            llama_memory_clear(memory, true); common = 0;
+        while (common < n - 1 && common < (int) rt->cached.size() && tokens[common] == rt->cached[common]) ++common;
+        auto * mem = llama_get_memory(rt->context);
+        if (common == 0 || !llama_memory_seq_rm(mem, -1, common, -1)) { llama_memory_clear(mem, true); common = 0; }
+        rt->cached.assign(tokens.begin(), tokens.begin() + common);
+        rt->timing[0] = n; rt->timing[1] = common;
+
+        for (int off = common; off < n; off += 256) {
+            check(rt);
+            int len = std::min(256, n - off);
+            if (llama_decode(rt->context, llama_batch_get_one(tokens.data() + off, len)) != 0) { check(rt); throw std::runtime_error("prompt decode failed"); }
+            rt->cached.insert(rt->cached.end(), tokens.begin() + off, tokens.begin() + off + len);
         }
-        runtime->previous_input.clear(); // Aborted/failed generations cannot seed the next request.
-        runtime->timing[0] = count; runtime->timing[1] = common;
-        for (int offset = common; offset < count; offset += 512) {
-            check_running(runtime);
-            auto batch = llama_batch_get_one(tokens.data() + offset, std::min(512, count - offset));
-            if (llama_decode(runtime->context, batch) != 0) { check_running(runtime); throw std::runtime_error("Qwen prompt decode failed"); }
-        }
-        const auto decoded_at = std::chrono::steady_clock::now();
-        runtime->timing[3] = std::chrono::duration_cast<std::chrono::milliseconds>(decoded_at - started).count();
-        // Only the adapter's constant startup probe supplies this private path. Save the
-        // INPUT prefill before generating any answer; never persist user command/response KV.
-        const auto snapshot = bytes(env, snapshot_path);
-        if (!snapshot.empty()) {
-            try { llama_state_save_file(runtime->context, snapshot.c_str(), tokens.data(), tokens.size()); }
-            catch (const std::exception &) { /* Optional startup acceleration. */ }
-        }
-        auto sampler = std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)>(
-            llama_sampler_chain_init(llama_sampler_chain_default_params()), llama_sampler_free);
-        const std::string grammar_text = bytes(env, grammar);
-        auto * constraint = llama_sampler_init_grammar(vocab, grammar_text.c_str(), "root");
-        if (!constraint) throw std::runtime_error("Qwen tool grammar initialization failed");
-        llama_sampler_chain_add(sampler.get(), constraint);
-        llama_sampler_chain_add(sampler.get(), llama_sampler_init_greedy());
-        std::string output;
-        bool ended = false;
-        for (int step = 0; step < limit && !runtime->cancelled.load(); ++step) {
-            check_running(runtime);
-            auto token = llama_sampler_sample(sampler.get(), runtime->context, -1);
-            if (llama_vocab_is_eog(vocab, token)) { ended = true; break; }
+        const auto t1 = std::chrono::steady_clock::now();
+        rt->timing[3] = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+
+        const std::string grammar_text = bytes(env, grammar_bytes);
+        auto grammar = std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)>(
+            grammar_text.empty() ? nullptr : llama_sampler_init_grammar(vocab, grammar_text.c_str(), "root"), llama_sampler_free);
+        if (!grammar_text.empty() && !grammar) throw std::runtime_error("grammar init failed");
+        const int n_vocab = llama_vocab_n_tokens(vocab);
+        std::vector<llama_token_data> candidates(n_vocab);
+
+        // Greedy decoding with a lazily applied grammar: check only the model's top token, and run the
+        // (expensive, whole-vocabulary) grammar filter only when that token is not allowed.
+        auto pick = [&]() -> llama_token {
+            const float * logits = llama_get_logits_ith(rt->context, -1);
+            llama_token best = 0;
+            for (llama_token t = 1; t < n_vocab; ++t) if (logits[t] > logits[best]) best = t;
+            if (!grammar) return best;
+            llama_token_data one = { best, logits[best], 0.0f };
+            llama_token_data_array single = { &one, 1, -1, false };
+            llama_sampler_apply(grammar.get(), &single);
+            if (single.data[0].logit != -INFINITY) return best;
+            for (llama_token t = 0; t < n_vocab; ++t) candidates[t] = { t, logits[t], 0.0f };
+            llama_token_data_array all = { candidates.data(), (size_t) n_vocab, -1, false };
+            llama_sampler_apply(grammar.get(), &all);
+            llama_token chosen = -1; float top = -INFINITY;
+            for (size_t k = 0; k < all.size; ++k) if (all.data[k].logit > top) { top = all.data[k].logit; chosen = all.data[k].id; }
+            if (chosen < 0) throw std::runtime_error("grammar allows no token");
+            return chosen;
+        };
+
+        std::string out;
+        bool finished = false;
+        for (int i = 0; i < max_tokens; ++i) {
+            check(rt);
+            llama_token tok = pick();
+            if (grammar) llama_sampler_accept(grammar.get(), tok);
+            if (llama_vocab_is_eog(vocab, tok)) { finished = true; break; }
             char piece[256];
-            int length = llama_token_to_piece(vocab, token, piece, sizeof(piece), 0, false);
-            if (length < 0) throw std::runtime_error("Qwen token piece exceeded buffer");
-            output.append(piece, length);
-            runtime->timing[2] = step + 1;
-            if (complete_json(output)) { ended = true; break; }
-            auto batch = llama_batch_get_one(&token, 1);
-            if (llama_decode(runtime->context, batch) != 0) { check_running(runtime); throw std::runtime_error("Qwen generation decode failed"); }
+            int len = llama_token_to_piece(vocab, tok, piece, sizeof(piece), 0, false);
+            if (len < 0) throw std::runtime_error("token piece too long");
+            out.append(piece, len);
+            rt->timing[2] = i + 1;
+            if (complete_json(out)) { finished = true; break; }
+            if (llama_decode(rt->context, llama_batch_get_one(&tok, 1)) != 0) { check(rt); throw std::runtime_error("decode failed"); }
+            rt->cached.push_back(tok);
         }
-        check_running(runtime);
-        runtime->timing[4] = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - decoded_at).count();
-        if (!ended) throw std::runtime_error("Qwen output token limit reached; no plan executed");
-        runtime->previous_input = tokens;
-        auto result = env->NewByteArray(output.size());
-        env->SetByteArrayRegion(result, 0, output.size(), reinterpret_cast<const jbyte *>(output.data()));
+        rt->timing[4] = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t1).count();
+        if (!finished) throw std::runtime_error("output token limit reached");
+        LOG("prompt=%lld reused=%lld out=%lld prefill=%lldms gen=%lldms", (long long) rt->timing[0], (long long) rt->timing[1],
+            (long long) rt->timing[2], (long long) rt->timing[3], (long long) rt->timing[4]);
+        auto result = env->NewByteArray(out.size());
+        env->SetByteArrayRegion(result, 0, out.size(), reinterpret_cast<const jbyte *>(out.data()));
         return result;
-    } catch (const std::exception & error) {
-        if (runtime) runtime->previous_input.clear();
-        fail(env, error); return nullptr;
+    } catch (const std::exception & e) {
+        if (rt) { rt->cached.clear(); llama_memory_clear(llama_get_memory(rt->context), true); }
+        throw_java(env, e); return nullptr;
     }
 }
-extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_localphone_agent_runtime_LlamaNative_restoreInput(JNIEnv * env, jobject, jlong handle, jbyteArray path, jbyteArray prompt) {
-    auto * runtime = reinterpret_cast<Runtime *>(handle);
-    if (!runtime) return false;
-    try {
-        const auto input = bytes(env, prompt);
-        const auto * vocab = llama_model_get_vocab(runtime->model);
-        const int count = -llama_tokenize(vocab, input.data(), input.size(), nullptr, 0, false, true);
-        if (count <= 0 || count >= 4096) return false;
-        std::vector<llama_token> expected(count), restored(4096);
-        if (llama_tokenize(vocab, input.data(), input.size(), expected.data(), count, false, true) != count) return false;
-        size_t restored_count = 0;
-        if (!llama_state_load_file(runtime->context, bytes(env, path).c_str(), restored.data(), restored.size(), &restored_count) ||
-            restored_count != expected.size() || !std::equal(expected.begin(), expected.end(), restored.begin()))
-            throw std::runtime_error("Incompatible input prefix");
-        runtime->previous_input = expected;
-        return true;
-    } catch (const std::exception &) {
-        runtime->previous_input.clear(); llama_memory_clear(llama_get_memory(runtime->context), true); return false;
-    }
+
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_dev_localphone_agent_llm_LlamaNative_metrics(JNIEnv * env, jobject, jlong handle) {
+    auto r = env->NewLongArray(5);
+    if (handle) env->SetLongArrayRegion(r, 0, 5, reinterpret_cast<Runtime *>(handle)->timing);
+    return r;
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_localphone_agent_runtime_LlamaNative_begin(JNIEnv *, jobject, jlong handle) {
+Java_dev_localphone_agent_llm_LlamaNative_reset(JNIEnv *, jobject, jlong handle) {
     if (handle) reinterpret_cast<Runtime *>(handle)->cancelled.store(false);
 }
-extern "C" JNIEXPORT jlongArray JNICALL
-Java_dev_localphone_agent_runtime_LlamaNative_metrics(JNIEnv * env, jobject, jlong handle) {
-    auto result = env->NewLongArray(5);
-    if (handle) env->SetLongArrayRegion(result, 0, 5, reinterpret_cast<Runtime *>(handle)->timing);
-    return result;
-}
 extern "C" JNIEXPORT void JNICALL
-Java_dev_localphone_agent_runtime_LlamaNative_cancel(JNIEnv *, jobject, jlong handle) {
+Java_dev_localphone_agent_llm_LlamaNative_cancel(JNIEnv *, jobject, jlong handle) {
     if (handle) reinterpret_cast<Runtime *>(handle)->cancelled.store(true);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_localphone_agent_runtime_LlamaNative_unload(JNIEnv *, jobject, jlong handle) {
+Java_dev_localphone_agent_llm_LlamaNative_unload(JNIEnv *, jobject, jlong handle) {
     delete reinterpret_cast<Runtime *>(handle);
 }

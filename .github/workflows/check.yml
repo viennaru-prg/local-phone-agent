@@ -1,45 +1,32 @@
 name: Android checks
 on:
   push:
-    branches: [main]
   pull_request:
-  workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  verify:
+  check:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-      - name: Verify core contracts
-        run: bash gradlew :core:test --no-daemon
-      - name: Check licensed model build availability
-        id: models
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Android SDK and NDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
+      - name: OpenCL link stub
+        run: python3 scripts/make-opencl-stub.py "$ANDROID_HOME/ndk/28.2.13676358"
+      - name: Core tests, APK, and lint
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          if [ -n "$HF_TOKEN" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Full APK build requires authorized FunctionGemma mobile-actions access in HF_TOKEN. Core tests run; full APK and lint are not exercised here. Published APK uses separately verified local builds."
-          fi
-      - name: Prepare pinned offline inputs
-        if: steps.models.outputs.available == 'true'
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          python3 scripts/prepare-assets.py
-          python3 scripts/prepare-agent-models.py
-          sdkmanager 'ndk;28.2.13676358' 'cmake;3.22.1'
-      - name: Compile full embedded-model APK and lint
-        if: steps.models.outputs.available == 'true'
-        run: bash gradlew :app:assembleAutomation :app:lintAutomation --no-daemon
-      # Distribution requires the existing private signing key. CI does not publish its generated debug key.
+          PYTHONUTF8: '1'
+        run: bash gradlew :core:test :app:assembleDebug :app:lintDebug --console=plain
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: check-results
+          path: |
+            core/build/reports/tests/test/
+            app/build/reports/lint-results-debug.*

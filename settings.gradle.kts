@@ -5,4 +5,3 @@ dependencyResolutionManagement {
 }
 rootProject.name = "LocalPhoneAgent"
 include(":core", ":app")
-include(":test-map-receiver")

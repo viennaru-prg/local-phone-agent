@@ -1,51 +1,88 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.VIBRATE" />
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- App names are needed to open the app the user asks for ("네이버 지도 열어"). -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
+
     <queries>
         <intent><action android:name="android.speech.RecognitionService" /></intent>
-        <package android:name="com.nhn.android.nmap" />
-        <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent>
-        <intent><action android:name="android.intent.action.SET_ALARM" /></intent>
-        <intent><action android:name="android.intent.action.SET_TIMER" /></intent>
-        <intent><action android:name="android.settings.SETTINGS" /></intent>
-        <intent><action android:name="android.settings.WIFI_SETTINGS" /></intent>
-        <intent><action android:name="android.settings.BLUETOOTH_SETTINGS" /></intent>
-        <intent><action android:name="android.settings.SOUND_SETTINGS" /></intent>
-        <intent><action android:name="android.settings.DISPLAY_SETTINGS" /></intent>
-        <intent><action android:name="android.intent.action.INSTALL_PACKAGE" /><data android:mimeType="application/vnd.android.package-archive" /></intent>
+        <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
     </queries>
-    <application android:name=".AgentApplication" android:label="Local Phone Agent"
-        android:theme="@style/AgentTheme" android:allowBackup="false"
-        android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules"
-        android:usesCleartextTraffic="false" android:icon="@drawable/ic_agent">
-        <provider android:name=".updates.UpdateFileProvider" android:authorities="${applicationId}.updates"
+
+    <application
+        android:name=".AgentApp"
+        android:label="@string/app_name"
+        android:icon="@drawable/ic_agent"
+        android:allowBackup="false"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="false"
+        android:theme="@style/Theme.Agent">
+
+        <!-- Qualcomm Adreno OpenCL driver for GPU inference (listed in the vendor public libraries). -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+        <provider android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
             android:exported="false" android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/update_paths" />
         </provider>
-        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
+
+        <!-- Launcher entry = voice trigger. Map the side key / back-tap to "open this app". -->
+        <activity
+            android:name=".VoiceActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity=".voice"
+            android:theme="@style/Theme.Agent.Voice">
             <intent-filter>
-                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
-        <activity android:name=".VoiceInvocationActivity" android:exported="true"
-            android:theme="@style/VoiceInvocationTheme" android:launchMode="singleTask"
-            android:taskAffinity="dev.localphone.agent.voice" android:excludeFromRecents="true"
-            android:noHistory="false" android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden">
+
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="true"
+            android:label="@string/settings_name"
+            android:taskAffinity=".settings">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".VoiceOnboardingActivity" android:exported="false" />
-        <activity android:name=".InvocationDebugActivity" android:exported="false" />
-        <activity android:name=".SpeechEvaluationActivity" android:exported="false" />
+
+        <service
+            android:name=".AgentService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="On-device assistant executing a spoken command in other apps" />
+        </service>
+
+        <service
+            android:name=".access.AgentAccessibilityService"
+            android:exported="false"
+            android:label="@string/accessibility_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility" />
+        </service>
     </application>
 </manifest>

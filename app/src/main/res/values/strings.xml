@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">음성 비서</string>
+    <string name="settings_name">음성 비서 설정</string>
+    <string name="accessibility_label">음성 비서 화면 조작</string>
+    <string name="accessibility_description">음성으로 내린 명령을 수행하는 동안에만 현재 앱 화면을 읽고 버튼을 누릅니다. 화면 내용은 휴대폰 안의 AI만 사용하며 외부로 보내지 않습니다.</string>
+</resources>

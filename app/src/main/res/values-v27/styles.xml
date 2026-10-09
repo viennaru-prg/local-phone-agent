@@ -1,5 +1,0 @@
-<resources>
-    <style name="AgentTheme" parent="AgentBaseTheme">
-        <item name="android:windowLightNavigationBar">true</item>
-    </style>
-</resources>

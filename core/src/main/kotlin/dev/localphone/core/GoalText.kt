@@ -64,6 +64,15 @@ object GoalText {
         return tokens.all { chatter.matches(it) || (pastTense.containsMatchIn(it) && it.length <= 4) }
     }
 
+    /**
+     * Whether the words ask for something to be done. A bare name ("이름 모임" — a misheard place) gives
+     * the screen agent nothing to do but wander the app in front.
+     */
+    fun hasRequest(goal: String): Boolean = Regex(
+        "줘|주세요|줄래|해라|하자|가자|할래|해봐|해요|합시다|켜|꺼|열어|닫아|틀어|멈춰|정지|재생|안내|알려|보여|찾아|검색|추가|넣어|담아|" +
+            "빼|삭제|지워|제거|넘겨|올려|내려|줄여|늘려|바꿔|설정|맞춰|보내|전화|읽어|불러|시작|종료|그만|play|pause|stop|open|search|navigate"
+    ).containsMatchIn(normalize(goal))
+
     /** "네이버 지도에서 카페 검색해줘" → "카페"; "아이유 노래 검색해줘" → "아이유 노래". */
     fun searchQuery(goal: String): String? {
         val m = Regex("^(?:.*?에서\\s*)?(.+?)\\s*(?:을|를)?\\s*(?:검색|찾아)").find(goal.trim()) ?: return null

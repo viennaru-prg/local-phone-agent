@@ -81,6 +81,9 @@ class Listener(private val context: Context, private val onPartial: (String) -> 
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+            // Names the user says to this assistant (saved places, app names): "일요모임" was heard as "이름 모임".
+            if (android.os.Build.VERSION.SDK_INT >= 33)
+                putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(dev.localphone.core.AppProfiles.vocabulary().take(50)))
         }) } catch (e: Exception) { Log.w("AgentVoice", "ASR start failed", e); finish(Result.Error("음성 인식을 시작하지 못했어요: ${e.message}")) }
     }
 

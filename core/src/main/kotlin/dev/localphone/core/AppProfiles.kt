@@ -56,6 +56,22 @@ object AppProfiles {
         persist(snapshot)
     }
 
+    /** Adds names to a remembered list ("places" of the navigation app), keeping the newest 40. */
+    fun remember(packageName: String, key: String, values: List<String>) {
+        val old = synchronized(learned) { learned[packageName]?.get(key) }?.split('|')?.filter { it.isNotBlank() }.orEmpty()
+        val merged = (values.map { it.trim() } + old).filter { it.length in 2..20 }.distinctBy { GoalText.normalize(it) }.take(40)
+        if (merged.isNotEmpty()) learn(packageName, key, merged.joinToString("|"))
+    }
+
+    /**
+     * Words the speech recognizer should expect: app names from the profiles and every place the
+     * agent has driven to or seen in full ("일요모임" was heard as "이름 모임" without this).
+     */
+    fun vocabulary(): List<String> {
+        val places = synchronized(learned) { learned.values.mapNotNull { it["places"] } }.flatMap { it.split('|') }
+        return (listOf("집", "회사") + places + builtIn.flatMap { it.names }).map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    }
+
     fun forPackage(packageName: String): AppProfile {
         val base = builtIn.firstOrNull { it.packageName == packageName } ?: AppProfile(packageName)
         val facts = synchronized(learned) { learned[packageName]?.toMap() }.orEmpty()

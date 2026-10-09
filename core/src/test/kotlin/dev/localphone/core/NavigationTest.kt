@@ -113,6 +113,31 @@ class NavigationTest {
         assertEquals(null, Prompts.placePicked("{\"place\":\"없음\"}", listOf("집", "회사", "수요모…")))
     }
 
+    @Test fun aGuessedDestinationIsConfirmedOnItsPreviewBeforeGuidance() {
+        fun items(v: ScreenView) = v.copy(elements = v.elements.map { e -> e.copy(kind = Kind.ITEM) })
+        val page = frequents("수요모…", "일요모…", "수원집")
+        val preview = items(navView("일요모임 경기 수원시 권선구", "자동차 21분", "안내 시작"))
+        val s = NavigationSession.forGoal("이름의 안내해 줘", alternatives = listOf("이름 모임 안내해 줘"))!!
+        s.choose("일요모…")
+        s.observe(page)
+        val pick = s.nextAction(page, 0)?.action as AgentAction.Click
+        s.recordAction(page, pick, true, 0)
+        s.observe(preview)
+        assertNull(s.nextAction(preview, 0), "no 안내 시작 before the user agrees")
+        assertEquals("일요모임으로 안내할까요?", s.confirmQuestion())
+        // Next run, the user said yes: the preview's start button is pressed.
+        val yes = NavigationSession.forGoal("이름의 안내해 줘")!!
+        yes.applyAnswer("일요모…", "응")
+        yes.observe(preview)
+        assertTrue(yes.isStart(preview.element((yes.nextAction(preview, 0)?.action as AgentAction.Click).id)!!.label))
+        // ... or named another place: that one is looked for instead.
+        val other = NavigationSession.forGoal("이름의 안내해 줘")!!
+        other.applyAnswer("일요모…", "아니 수요모임")
+        other.observe(page)
+        assertEquals("수요모…", page.element((other.nextAction(page, 0)?.action as AgentAction.Click).id)?.label)
+        assertFalse(GoalText.hasRequest("이름 모임")); assertTrue(GoalText.hasRequest("수요모임 안내해줘"))
+    }
+
     @Test fun aCutNameInTheCarouselStillMatches() {
         val s = NavigationSession.forGoal("수요모임으로 안내해줘")!!
         val v = frequents("집", "회사", "수요모…", "일요모…")

@@ -216,6 +216,8 @@ class Agent(
     }
 
     private fun finish(run: Run, goal: String, modelSay: String): AgentResult {
+        // Places seen or driven to become words the recognizer expects next time.
+        navigation?.let { AppProfiles.remember(it.appPackage, "places", it.knownPlaceNames()) }
         val say = GoalText.spokenResult(goal, modelSay)
         val learned = run.learned.isNotEmpty() && (run.modelSteps > 1 || !run.replayed)
         if (learned) recipes.put(Recipe(GoalKey.of(goal), goal, run.learned.toList(), say, phone.now()))
@@ -229,6 +231,12 @@ class Agent(
         if (previous.isEmpty() && GoalText.isChatter(goal))
             return AgentResult(Outcome.FAILED, "할 일을 알아듣지 못했어요. 다시 말씀해 주세요.", run.history)
         var view = observe(run) ?: return fail(run, "화면을 읽을 수 없습니다. 접근성 서비스가 켜져 있는지 확인해 주세요.")
+        // The user answered "…로 안내할까요?": yes drives to the asked place, a name looks for that one.
+        if (navigation != null) {
+            val askedAt = run.history.indexOfLast { it.action == "목적지 확인 질문" }
+            val answer = run.history.drop(askedAt + 1).lastOrNull { it.action == "사용자 답변" }
+            if (askedAt >= 0 && answer != null) navigation.applyAnswer(run.history[askedAt].outcome, answer.outcome)
+        }
         navigation?.observe(view)
 
         // Resolve any explicitly named installed app through Android; never spend a model call
@@ -313,6 +321,12 @@ class Agent(
                 view = next
                 if (run.noChange >= config.maxNoChange) return fail(run, "화면이 더 이상 바뀌지 않아 중단했습니다.")
                 continue
+            }
+            // The model's guess is on the route preview: ask before driving there ("일요모임으로 안내할까요?").
+            navigation?.confirmQuestion()?.let { question ->
+                run.history += HistoryLine("목적지 확인 질문", navigation.pendingPlace().orEmpty())
+                listener.step(StepRecord(index, "harness", view.render(), "", "ask", question, "추측한 목적지는 사용자 확인 후 안내", 0, phone.now() - started))
+                return AgentResult(Outcome.ASK, question, run.history)
             }
             // The harness has seen every saved place and none is named as heard: the model judges which one
             // the user meant (a misheard "수유 모임" for 수요모임). One number out; the harness walks to it.

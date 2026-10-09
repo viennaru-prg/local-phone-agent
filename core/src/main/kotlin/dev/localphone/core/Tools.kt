@@ -162,6 +162,8 @@ class Assistant(
     suspend fun run(goal: String, previous: List<HistoryLine> = emptyList()): AgentResult {
         if (previous.isNotEmpty()) return agent.run(goal, previous)
         if (GoalText.isChatter(goal)) return AgentResult(Outcome.FAILED, "할 일을 알아듣지 못했어요. 다시 말씀해 주세요.", emptyList())
+        // A name with no request ("이름 모임") would only send the screen agent wandering the app in front.
+        if (!GoalText.hasRequest(goal)) return AgentResult(Outcome.FAILED, "'${goal.trim()}'을(를) 어떻게 할지 함께 말씀해 주세요. 예: 회사로 안내해줘", emptyList())
         tools.openDirect(goal)?.let {
             listener.step(StepRecord(0, "android_api", "", "", "open", "요청한 앱·화면 확인됨", "단일 실행 목표를 Android API로 처리", 0, 0))
             return AgentResult(Outcome.DONE, it, emptyList())

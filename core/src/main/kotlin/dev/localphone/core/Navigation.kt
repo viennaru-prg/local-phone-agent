@@ -15,11 +15,7 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
                         /** Other things the recognizer heard for the destination ("수요 모임" behind "수유 모임"). */
                         val heard: List<String> = emptyList()) {
     /** What the assistant says once guidance is verified: "회사로 안내를 시작했어요." */
-    val spokenStart: String get() = (chosenFull ?: chosen?.let { c ->
-        // A cut carousel name ("수요모…"): say it as the recognizer heard it ("수요 모임").
-        if (!c.endsWith("…")) c else (heard + names).firstOrNull { GoalText.normalize(it).startsWith(GoalText.normalize(c.removeSuffix("…"))) }
-            ?: c.removeSuffix("…")
-    } ?: names.firstOrNull())?.takeIf { it.isNotBlank() }?.let { name ->
+    val spokenStart: String get() = (chosenSpoken ?: answered.lastOrNull() ?: names.firstOrNull())?.takeIf { it.isNotBlank() }?.let { name ->
         val c = name.last()
         val batchim = c in '가'..'힣' && (c - '가') % 28 != 0 && (c - '가') % 28 != 8
         "$name${if (batchim) "으로" else "로"} 안내를 시작했어요."
@@ -56,6 +52,55 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
      */
     fun choiceNeeded(): List<String>? = seenPlaces.toList().takeIf { carouselEnd && !choiceAsked && chosen == null && it.isNotEmpty() }
 
+    private var confirmed = false
+    /** A name the user gave when answering "…로 안내할까요?" with another place ("아니, 수요모임"). */
+    private val answered = mutableListOf<String>()
+
+    /** The model's pick, said naturally: the preview's full name, else the heard name it starts with. */
+    private val chosenSpoken: String? get() = chosen?.let { c ->
+        chosenFull ?: if (!c.endsWith("…")) c else (heard + names).firstOrNull { GoalText.normalize(it).startsWith(GoalText.normalize(c.removeSuffix("…"))) }
+            ?: c.removeSuffix("…")
+    }
+
+    /**
+     * A guessed destination is never driven to unasked: once its route preview shows (nothing started
+     * yet), the user is asked "일요모임으로 안내할까요?". Null when there is nothing to confirm.
+     */
+    fun confirmQuestion(): String? {
+        if (chosen == null || confirmed || evidence.state != "PREVIEW" || !destinationBound) return null
+        return "${withRo(chosenSpoken ?: return null)} 안내할까요?"
+    }
+
+    /** Full place names this run saw or used, for the recognizer's vocabulary (cut carousel labels are not names). */
+    fun knownPlaceNames(): List<String> =
+        (seenPlaces.filterNot { it.endsWith("…") } + listOfNotNull(chosenFull, chosenSpoken) + answered +
+            (if (evidence.complete) listOfNotNull(names.firstOrNull()) else emptyList())).distinct()
+
+    val appPackage: String get() = app.packageName
+
+    /** What to remember for the answer: the place that was asked about. */
+    fun pendingPlace(): String? = chosen
+
+    /** The user's answer to [confirmQuestion]: yes → go; another name → look for that one instead. */
+    fun applyAnswer(place: String, answer: String) {
+        val a = GoalText.normalize(answer)
+        if (Regex("^(?:응|어|네|넵|예|그래|맞아|맞아요|좋아|ㅇㅇ|가자|가줘|안내해줘|부탁해|yes|ok)").containsMatchIn(a) &&
+            !Regex("아니|말고|틀렸").containsMatchIn(a)) {
+            chosen = place; confirmed = true; choiceAsked = true; targetPicked = true
+            return
+        }
+        val other = answer.replace(Regex("^\\s*(?:아니|아니요|아뇨|아니야)[,\\s]*"), "")
+            .replace(Regex("\\s*(?:말고|으로|로|에|가자|가줘|안내해\\s*줘|해\\s*줘)\\s*.*$"), "").trim()
+        if (other.length >= 2) answered += other
+        choiceAsked = true
+    }
+
+    private fun withRo(name: String): String {
+        val c = name.last()
+        val batchim = c in '가'..'힣' && (c - '가') % 28 != 0 && (c - '가') % 28 != 8
+        return "$name${if (batchim) "으로" else "로"}"
+    }
+
     /** The model's pick (null = none of them): page back through the list to it. */
     fun choose(place: String?) {
         choiceAsked = true
@@ -73,7 +118,7 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
         carouselEnd = false; carouselScrolls = 0; carouselSignature = null; pageBack = false; collectedBack = false
     }
 
-    private fun matches(label: String): Boolean = (names + listOfNotNull(chosen)).any { name ->
+    private fun matches(label: String): Boolean = (names + answered + listOfNotNull(chosen)).any { name ->
         val wanted = GoalText.normalize(name)
         Regex("(?:^|[\\s:：])${Regex.escape(name)}(?:$|[\\s,()])", RegexOption.IGNORE_CASE).containsMatchIn(label) ||
             GoalText.normalize(label) == wanted ||
@@ -179,6 +224,8 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
             return null
         }
         if (!destinationBound) return null
+        // A destination the model guessed waits here, on the preview, for the user's yes (confirmQuestion).
+        if (chosen != null && !confirmed) return null
         val starts = view.elements.filter { isStart(it.label) }
         // NAVER sometimes exposes the visual button only as TextView. A computed, bound route and
         // a stable enabled label allow an observed-node gesture, never a guessed screen coordinate.

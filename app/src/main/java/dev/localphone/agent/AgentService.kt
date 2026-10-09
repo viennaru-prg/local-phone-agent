@@ -112,17 +112,39 @@ class AgentService : Service() {
                 val json = org.json.JSONObject(intent.getStringExtra(EXTRA_SPEECH) ?: "{}").optJSONArray("hypotheses")
                 (0 until (json?.length() ?: 0)).map { json!!.getJSONObject(it).getString("text") }.drop(1)
             }.getOrDefault(emptyList())
-            val navigation = NavigationSession.forGoal(goal, app.places.mentionedIn(goal), alternatives)
-            val agent = Agent(app.llm, phone,
-                if (app.prefs.useRecipes) app.recipes else RecipeBook({ null }, {}),
-                { app.prefs.noteLines },
-                config = AgentConfig(withNote = app.prefs.withNote),
-                listener = listener, navigation = navigation)
-            // Tool first (deep links, media keys), the on-screen agent for everything else.
-            val assistant = Assistant(app.llm, AndroidTools(this@AgentService, phone, navigation, listener), app.places, agent, listener)
-            val result = try { assistant.run(goal, previous) } catch (e: CancellationException) { throw e } catch (e: Exception) {
-                Log.e(TAG, "agent crashed", e)
-                AgentResult(Outcome.FAILED, "오류로 중단했어요: ${e.message}", emptyList())
+            suspend fun runOne(command: String, before: List<HistoryLine>, heard: List<String>): AgentResult {
+                val navigation = NavigationSession.forGoal(command, app.places.mentionedIn(command), heard)
+                val agent = Agent(app.llm, phone,
+                    if (app.prefs.useRecipes) app.recipes else RecipeBook({ null }, {}),
+                    { app.prefs.noteLines },
+                    config = AgentConfig(withNote = app.prefs.withNote),
+                    listener = listener, navigation = navigation)
+                // Tool first (deep links, media keys), the on-screen agent for everything else.
+                val assistant = Assistant(app.llm, AndroidTools(this@AgentService, phone, navigation, listener), app.places, agent, listener)
+                return try { assistant.run(command, before) } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                    Log.e(TAG, "agent crashed", e)
+                    AgentResult(Outcome.FAILED, "오류로 중단했어요: ${e.message}", emptyList())
+                }
+            }
+            // "수원 집으로 안내해 주고 노래 틀어 줘": independent commands run one after another.
+            val steps = if (previous.isEmpty()) CommandSplit.split(goal) else null
+            var askedStep: String? = null
+            val result = if (steps == null) runOne(goal, previous, alternatives) else {
+                val says = mutableListOf<String>()
+                var last = AgentResult(Outcome.FAILED, "", emptyList())
+                for ((i, step) in steps.withIndex()) {
+                    listener.progress("${i + 1}/${steps.size}: $step")
+                    trace.step(StepRecord(0, "split", "", "", "step ${i + 1}/${steps.size}", step, "여러 명령을 차례로 실행", 0, 0), null)
+                    last = runOne(step, emptyList(), emptyList())
+                    if (last.outcome != Outcome.DONE) { askedStep = step; break }
+                    says += last.say
+                }
+                // While driving, the map comes back once the other parts are done.
+                if (last.outcome == Outcome.DONE && steps.dropLast(1).any { ShortcutGoals.navigationTarget(it) != null } &&
+                    ShortcutGoals.navigationTarget(steps.last()) == null)
+                    Harness.navigationApp().names.firstOrNull()?.let { phone.openApp(it) }
+                if (last.outcome == Outcome.DONE) AgentResult(Outcome.DONE, says.joinToString(" "), last.history)
+                else AgentResult(last.outcome, (says + last.say).joinToString(" "), last.history)
             }
             trace.finish(result)
             if (result.outcome == Outcome.FAILED) trace.observation(AgentAccessibilityService.instance?.observationDiagnostic)
@@ -130,7 +152,8 @@ class AgentService : Service() {
             a11y.showStatus(if (result.outcome == Outcome.DONE) "완료: ${result.say}" else result.say)
             when (result.outcome) {
                 Outcome.ASK -> {
-                    pending = Pending(goal, result.history)
+                    // A question in one part of several commands: the answer continues that part.
+                    pending = Pending(askedStep ?: goal, result.history)
                     a11y.hideOverlay()
                     if (app.prefs.speak) speaker.say(result.say)
                     startActivity(Intent(this@AgentService, VoiceActivity::class.java)

@@ -157,7 +157,24 @@ class AgentService : Service() {
                 val json = org.json.JSONObject(intent.getStringExtra(EXTRA_SPEECH) ?: "{}").optJSONArray("hypotheses")
                 (0 until (json?.length() ?: 0)).map { json!!.getJSONObject(it).getString("text") }.drop(1)
             }.getOrDefault(emptyList())
-            suspend fun runOne(command: String, before: List<HistoryLine>, heard: List<String>): AgentResult {
+            // A command no rule recognized ("수요모임 가는 길 좀 알려줄래"): the model says what it asks for, in the
+            // sentence the rules handle ("수요모임으로 안내해줘"). Recognized commands never wait for the model.
+            suspend fun understood(spoken: String): String {
+                if (!Intents.worthAsking(spoken)) return spoken
+                listener.progress("명령 이해 중…")
+                val t0 = android.os.SystemClock.elapsedRealtime()
+                val raw = try { app.llm.decide(Intents.prompt(spoken), Intents.GRAMMAR) } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                    Log.w(TAG, "intent", e); ""
+                }
+                val rewritten = Intents.rewrite(spoken, raw)
+                val ms = android.os.SystemClock.elapsedRealtime() - t0
+                listener.step(StepRecord(0, "model", "", raw, "intent", rewritten ?: "규칙에 없는 일: 화면 작업", "규칙에 없는 말투를 모델이 해석", ms, ms))
+                // Left to the screen agent: its long step prompt is decoded while it opens the app.
+                if (rewritten == null) app.llm.prewarm()
+                return rewritten ?: spoken
+            }
+            suspend fun runOne(spoken: String, before: List<HistoryLine>, heard: List<String>): AgentResult {
+                val command = if (before.isEmpty()) understood(spoken) else spoken
                 val navigation = NavigationSession.forGoal(command, app.places.mentionedIn(command), heard) ?: NavigationSession.forEta(command, heard)
                 val agent = Agent(app.llm, phone,
                     if (app.prefs.useRecipes) app.recipes else RecipeBook({ null }, {}),

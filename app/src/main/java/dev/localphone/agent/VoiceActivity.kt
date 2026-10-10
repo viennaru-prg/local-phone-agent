@@ -79,12 +79,12 @@ class VoiceActivity : Activity() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS), 1); return
         }
-        app.llm.prewarm()
+        app.llm.preload()
         listen()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) { app.llm.prewarm(); listen() } else finish()
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) { app.llm.preload(); listen() } else finish()
     }
 
     private fun listen() {

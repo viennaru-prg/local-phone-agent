@@ -481,6 +481,9 @@ class Agent(
         // A screen goal found through the app's search ("설정에서 소프트웨어 정보 보여줘") still has to open
         // the result: the list of matches is not the screen.
         if (action is AgentAction.Type && ShortcutGoals.screenName(goal) != null && ShortcutGoals.searchPrefix(goal) == null) return null
+        // Ending guidance is proven by the map itself (guidanceEnded at the loop top). Its drawer shows
+        // "안내음성…" rows, and a verifier read "길 안내 이제 그만해" as done right after opening it.
+        if (Harness.isEndGuidance(goal)) return null
         if (!alreadyThere && !outcome.contains("바뀜") && !(action is AgentAction.OpenApp && outcome.startsWith("열림")) &&
             !(semanticCheck && outcome.startsWith("변화 없음"))) return null
         val resultAppeared = navigation == null && !CompletionGrounding.hasOutcome(goal, view, run.history) &&

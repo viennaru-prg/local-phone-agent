@@ -96,8 +96,8 @@ object Harness {
         val item = hits.singleOrNull { GoalText.normalize(it.label) == exact }
             // A row may carry its container's name after " · " ("배터리 정보 · gesture controller view"), and
             // the same row may be listed under two sections (폰 정보 and 배터리 both list 배터리 정보): either one.
-            ?: hits.filter { GoalText.normalize(it.label.substringBefore(" · ")) == exact }.takeIf { same ->
-                same.map { GoalText.normalize(it.label) }.distinct().size == 1 }?.firstOrNull()
+            // Rows named exactly so under different headings ("· 최근 사용한 설정", "· 최근 검색") all open it.
+            ?: hits.firstOrNull { GoalText.normalize(it.label.substringBefore(" · ")) == exact }
             // "저장 탭 열어줘": the bottom tab "저장 탭 저장", not the map's "저장 레이어 끄기".
             ?: hits.takeIf { tab.containsMatchIn(goal) }?.singleOrNull { tab.containsMatchIn(it.label) }
             ?: hits.singleOrNull()

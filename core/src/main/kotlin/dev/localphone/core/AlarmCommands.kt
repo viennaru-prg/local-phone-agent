@@ -17,6 +17,8 @@ sealed interface AlarmRequest {
     data object List : AlarmRequest
     /** [once]: skip only the coming ring of a repeating alarm; it is switched back on right after. */
     data class Switch(val target: AlarmTarget, val on: Boolean, val once: Boolean) : AlarmRequest
+    /** Deletes one alarm; several at that time are asked about, never guessed. */
+    data class Delete(val target: AlarmTarget) : AlarmRequest
     /** [name]: the sound to pick ("Over the Horizon으로"), null to open the choice for the user. */
     data class Sound(val target: AlarmTarget, val name: String?) : AlarmRequest
 }
@@ -31,6 +33,7 @@ object AlarmCommands {
         val target = time(goal)?.let { (h, m) -> AlarmTarget.At(h, m) } ?: AlarmTarget.Next
         if (Regex("소리|음악|노래|벨소리|알람음|음원").containsMatchIn(goal) && Regex("바꿔|변경|교체|바꾸|설정").containsMatchIn(goal))
             return AlarmRequest.Sound(target, soundName(goal))
+        if (Regex("지워|삭제|없애").containsMatchIn(goal)) return AlarmRequest.Delete(target)
         val off = Regex("꺼|끄|해제|취소|울리지|안\\s*울리|건너뛰|스킵").containsMatchIn(goal)
         val on = !off && Regex("켜|다시\\s*울리|살려").containsMatchIn(goal)
         if (off || on) {
@@ -82,7 +85,7 @@ object AlarmCommands {
     }
 
     /** The clock app's list: each alarm's switch says its name, time and days. */
-    fun rows(view: ScreenView): List<AlarmRow> = view.elements.filter { it.kind == Kind.SWITCH }.mapNotNull { e ->
+    fun rows(view: ScreenView): List<AlarmRow> = if (selecting(view)) emptyList() else view.elements.filter { it.kind == Kind.SWITCH }.mapNotNull { e ->
         val m = Regex("(오전|오후|AM|PM)\\s*(\\d{1,2}):(\\d{2})", RegexOption.IGNORE_CASE).find(e.label) ?: return@mapNotNull null
         var hour = m.groupValues[2].toInt() % 12
         if (m.groupValues[1] == "오후" || m.groupValues[1].equals("PM", true)) hour += 12
@@ -90,6 +93,12 @@ object AlarmCommands {
         val rest = e.label.substring(m.range.last + 1)
         AlarmRow(e.id, label, hour, m.groupValues[3].toInt(), days(rest), e.checked == true, rest.contains("공휴일에는 끄기"),
             date.find(rest)?.value?.let { d -> "${d.trim()}${Regex("[월화수목금토일]요일").find(rest.substringAfter(d))?.value?.let { " $it" }.orEmpty()}" })
+    }
+
+    /** The list's selection mode ("1개 선택됨"): its switches mark selected rows, not alarms that are on. */
+    fun selecting(view: ScreenView): Boolean = view.elements.any {
+        // Scrolled, the header shrinks to a bare count ("1"); its "모두 선택" box is always there.
+        Regex("^\\d+개 선택됨$").matches(it.label.trim()) || (it.kind == Kind.SWITCH && it.label.trim() == "모두 선택")
     }
 
     /** "평일 오전 6시 30분", "토요일 오전 7시 30분", "'운동' 매일 오후 6시". */

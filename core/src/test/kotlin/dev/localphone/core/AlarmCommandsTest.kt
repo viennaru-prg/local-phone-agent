@@ -27,6 +27,8 @@ class AlarmCommandsTest {
         assertEquals(AlarmRequest.Switch(AlarmTarget.At(14, 20), on = true, once = false), AlarmCommands.parse("오후 2시 20분 알람 다시 켜줘"))
         assertEquals(AlarmRequest.Sound(AlarmTarget.Next, null), AlarmCommands.parse("알람 음악 교체해줘"))
         assertEquals(AlarmRequest.Sound(AlarmTarget.At(6, 30), "Over the Horizon"), AlarmCommands.parse("6시 반 알람 소리 Over the Horizon으로 바꿔줘"))
+        assertEquals(AlarmRequest.Delete(AlarmTarget.At(4, 44)), AlarmCommands.parse("4시 44분 알람 지워줘"))
+        assertEquals(AlarmRequest.Delete(AlarmTarget.At(5, 5)), AlarmCommands.parse("새벽 5시 5분 알람 삭제해줘"))
         // Setting one is the quick command's; other words are not alarms.
         assertNull(AlarmCommands.parse("7시 알람 설정해줘"))
         assertNull(AlarmCommands.parse("음악 꺼줘"))

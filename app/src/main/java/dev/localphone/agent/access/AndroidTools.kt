@@ -225,7 +225,10 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
             return null
         }
         if (request == AlarmRequest.List) { walk(); return AlarmCommands.summary(rows.values.toList()) }
-        val target = (request as? AlarmRequest.Switch)?.target ?: (request as AlarmRequest.Sound).target
+        val target = when (request) {
+            is AlarmRequest.Switch -> request.target; is AlarmRequest.Sound -> request.target; is AlarmRequest.Delete -> request.target
+            else -> return null
+        }
         val wanted: (AlarmRow) -> Boolean = when (target) {
             AlarmTarget.Next -> { row -> nextAt != null && AlarmCommands.rowAt(listOf(row), nextAt) != null }
             is AlarmTarget.At -> { row -> AlarmCommands.rowsAt(listOf(row), target.hour, target.minute).isNotEmpty() }
@@ -238,8 +241,59 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
         return when (request) {
             is AlarmRequest.Switch -> switchAlarm(view, row, request, name, nextAt)
             is AlarmRequest.Sound -> alarmSound(view, row, request.name, name)
+            is AlarmRequest.Delete -> {
+                // Two alarms at that time ("평일 7시" and "토요일 7시"): ask, never pick one to delete.
+                if (target is AlarmTarget.At) {
+                    walk(); val same = AlarmCommands.rowsAt(rows.values.toList(), target.hour, target.minute)
+                    if (same.size > 1) return "${AlarmCommands.clock(target.hour, target.minute)} 알람이 ${same.size}개 있어요: " +
+                        same.joinToString(", ") { AlarmCommands.describe(it) } + ". 요일까지 말씀해 주시면 지울게요."
+                    view = openAlarmList() ?: return null
+                    val again = walk(wanted) ?: return null
+                    return deleteAlarm(view, again, AlarmCommands.describe(again))
+                }
+                deleteAlarm(view, row, name)
+            }
             else -> null
         }
+    }
+
+    /**
+     * Long-press selects the alarm; 삭제 is pressed only when that alarm, and nothing else, is selected.
+     * Done when its row is gone from the list.
+     */
+    private suspend fun deleteAlarm(list: ScreenView, row: AlarmRow, name: String): String? {
+        suspend fun screen() = phone.observe()?.let(ScreenCompactor::compact)
+        val switch = list.element(row.id) ?: return null
+        val item = list.elements.firstOrNull { it.kind == Kind.ITEM && it.bounds.centerY in switch.bounds.top..switch.bounds.bottom } ?: return null
+        if (!phone.perform(list, AgentAction.LongClick(item.id))) return null
+        val selecting = withTimeoutOrNull(2500) {
+            while (true) { delay(250); screen()?.takeIf(AlarmCommands::selecting)?.let { return@withTimeoutOrNull it } }
+            @Suppress("UNREACHABLE_CODE") null
+        } ?: return null
+        // In selection mode the switches are the checkboxes: exactly one ticked, on this alarm's row.
+        val ticked = selecting.elements.filter { it.kind == Kind.SWITCH && it.checked == true && Regex("(오전|오후)\\s*\\d{1,2}:\\d{2}").containsMatchIn(it.label) }
+        val mine = ticked.singleOrNull()?.takeIf { t -> t.label.trim() == switch.label.trim() }
+        Log.i(TAG, "alarm delete: want='${switch.label}' ticked=${ticked.map { it.label }} selecting=${AlarmCommands.selecting(selecting)}")
+        if (mine == null) { phone.perform(selecting, AgentAction.Back); return null }
+        val delete = selecting.elements.firstOrNull { it.enabled && it.kind == Kind.BUTTON && it.label.trim() == "삭제" }
+            ?: run { phone.perform(selecting, AgentAction.Back); return null }
+        if (!phone.perform(selecting, AgentAction.Click(delete.id))) return null
+        delay(800)
+        // A confirmation sheet, if the app asks.
+        screen()?.let { now -> now.elements.firstOrNull { it.enabled && it.kind == Kind.BUTTON && it.label.trim() == "삭제" && AlarmCommands.selecting(now).not() }
+            ?.let { phone.perform(now, AgentAction.Click(it.id)); delay(800) } }
+        val gone = withTimeoutOrNull(3000) {
+            while (true) {
+                val now = screen()
+                if (now != null && !AlarmCommands.selecting(now) && AlarmCommands.rows(now).isNotEmpty() &&
+                    AlarmCommands.rows(now).none { it.label == row.label && it.hour == row.hour && it.minute == row.minute && it.days == row.days })
+                    return@withTimeoutOrNull true
+                delay(200)
+            }
+            @Suppress("UNREACHABLE_CODE") false
+        } == true
+        if (gone) AlarmSkips.forget(context, row.hour, row.minute, row.days, row.label)
+        return if (gone) "$name 알람을 지웠어요." else null
     }
 
     private suspend fun openAlarmList(): ScreenView? {
@@ -247,7 +301,10 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
             .onFailure { return null }
         return withTimeoutOrNull(4000) {
             while (true) {
-                phone.observe()?.let(ScreenCompactor::compact)?.takeIf { AlarmCommands.rows(it).isNotEmpty() }?.let { return@withTimeoutOrNull it }
+                val now = phone.observe()?.let(ScreenCompactor::compact)
+                // Left in selection mode (a long press earlier): leave it before reading or changing anything.
+                if (now != null && AlarmCommands.selecting(now)) { phone.perform(now, AgentAction.Back); delay(500); continue }
+                now?.takeIf { AlarmCommands.rows(it).isNotEmpty() }?.let { return@withTimeoutOrNull it }
                 delay(150)
             }
             @Suppress("UNREACHABLE_CODE") null
@@ -315,9 +372,20 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
         if (tones.snapshot.packageName.contains("permissioncontroller"))
             return "시계 앱이 음악·오디오 접근 권한을 묻고 있어요. 허용할지 직접 골라 주세요. 그다음 다시 말씀해 주시면 '$sound'을(를) 찾을게요."
         val wanted = GoalText.normalize(sound)
-        val tone = tones.elements.firstOrNull { it.enabled && GoalText.normalize(it.label).contains(wanted) }
-            ?: return "'$sound' 알람음을 찾지 못했어요. 알람음 목록을 열어 두었어요."
-        if (!phone.perform(tones, AgentAction.Click(tone.id))) return null
+        // The ringtone list is long: page down through it until the name shows.
+        var page = tones
+        var tone: Element? = null
+        for (i in 0..10) {
+            tone = page.elements.firstOrNull { it.enabled && it.kind != Kind.TEXT && GoalText.normalize(it.label).contains(wanted) }
+            if (tone != null) break
+            val list = page.lists.maxByOrNull { it.bounds.height } ?: break
+            val before = page.elements.map { it.label }
+            phone.perform(page, AgentAction.Scroll(ScrollDir.DOWN, list.id)); delay(450)
+            page = screen() ?: return null
+            if (page.elements.map { it.label } == before) break
+        }
+        if (tone == null) return "'$sound' 알람음을 찾지 못했어요. 알람음 목록을 열어 두었어요."
+        if (!phone.perform(page, AgentAction.Click(tone.id))) return null
         delay(600)
         // Back to the editor (the choice is kept), then save.
         repeat(3) {

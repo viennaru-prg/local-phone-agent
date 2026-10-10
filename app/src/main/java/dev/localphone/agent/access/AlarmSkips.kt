@@ -33,6 +33,10 @@ object AlarmSkips {
         Log.i(TAG, "skip ${skip.hour}:${skip.minute} days=${skip.days} until ${java.util.Date(at)}")
     }
 
+    /** A deleted alarm must not come back: its pending skip is dropped. */
+    fun forget(context: Context, hour: Int, minute: Int, days: List<Int>, label: String?) =
+        save(context, load(context).filterNot { it.hour == hour && it.minute == minute && it.days == days && it.label == label })
+
     /** Turns back on every skipped alarm whose ring has passed. */
     fun catchUp(context: Context) {
         val now = System.currentTimeMillis()

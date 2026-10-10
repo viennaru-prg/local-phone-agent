@@ -205,6 +205,7 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
         if (ringing && request is AlarmRequest.Switch && !request.on && request.target == AlarmTarget.Next) return ringingAction(snooze = false, null)
         val nextAt = context.getSystemService(android.app.AlarmManager::class.java).nextAlarmClock?.triggerTime
         if (request == AlarmRequest.Next) return AlarmCommands.next(System.currentTimeMillis(), nextAt)
+            .also { if (nextAt != null) ConversationMemory.shared.rememberAlarm("다음 알람") }
         var view = openAlarmList() ?: return null
         val rows = linkedMapOf<String, AlarmRow>()
         fun key(r: AlarmRow) = "${r.label}|${r.hour}:${r.minute}|${r.days}"
@@ -229,7 +230,11 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
             }
             return null
         }
-        if (request == AlarmRequest.List) { walk(); return AlarmCommands.summary(rows.values.toList()) }
+        if (request == AlarmRequest.List) {
+            walk()
+            ConversationMemory.shared.rememberAlarmList(AlarmCommands.spokenOrder(rows.values.toList()))
+            return AlarmCommands.summary(rows.values.toList())
+        }
         val target = when (request) {
             is AlarmRequest.Switch -> request.target; is AlarmRequest.Sound -> request.target; is AlarmRequest.Delete -> request.target
             else -> return null
@@ -256,6 +261,7 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
             is AlarmTarget.At -> "${AlarmCommands.clock(target.hour, target.minute)} 알람을 찾지 못했어요."
         }
         val name = AlarmCommands.describe(row)
+        ConversationMemory.shared.rememberAlarm("${AlarmCommands.clock(row.hour, row.minute)} 알람")
         return when (request) {
             is AlarmRequest.Switch -> switchAlarm(view, row, request, name, ringAt)
             is AlarmRequest.Sound -> alarmSound(view, row, request.name, name)

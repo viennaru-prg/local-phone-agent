@@ -136,6 +136,11 @@ object AlarmCommands {
         return "켜진 알람은 ${on.size}개예요. $said.$offText"
     }
 
+    /** The alarms in the order [summary] says them: "두 번째 거" counts in this order. */
+    fun spokenOrder(rows: List<AlarmRow>): List<AlarmRow> = rows.filter { it.on }
+        .groupBy { listOfNotNull(it.label?.let { l -> "'$l'" }, it.date ?: dayWords(it.days)).joinToString(" ") }
+        .values.flatMap { group -> group.sortedBy { it.hour * 60 + it.minute } }
+
     /** The next ring: "내일 오전 7시 50분이에요. 11시간 33분 남았어요." */
     fun next(nowMillis: Long, atMillis: Long?): String {
         if (atMillis == null) return "예정된 알람이 없어요."

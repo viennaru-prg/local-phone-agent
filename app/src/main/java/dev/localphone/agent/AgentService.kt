@@ -159,6 +159,7 @@ class AgentService : Service() {
             }.getOrDefault(emptyList())
             // A command no rule recognized ("수요모임 가는 길 좀 알려줄래"): the model says what it asks for, in the
             // sentence the rules handle ("수요모임으로 안내해줘"). Recognized commands never wait for the model.
+            val memory = ConversationMemory.shared
             suspend fun understood(spoken: String): String {
                 if (!Intents.worthAsking(spoken)) return spoken
                 listener.progress("명령 이해 중…")
@@ -174,7 +175,16 @@ class AgentService : Service() {
                 return rewritten ?: spoken
             }
             suspend fun runOne(spoken: String, before: List<HistoryLine>, heard: List<String>): AgentResult {
-                val command = if (before.isEmpty()) understood(spoken) else spoken
+                // "거기로 안내해줘", "두 번째 거 꺼줘": what the last answers were about, named again.
+                var said = spoken
+                if (before.isEmpty()) when (val ref = memory.resolve(spoken)) {
+                    is ConversationMemory.Resolution.Rewritten -> {
+                        listener.step(StepRecord(0, "memory", "", "", "context", ref.sentence, ref.meaning, 0, 0)); said = ref.sentence
+                    }
+                    is ConversationMemory.Resolution.Unclear -> return AgentResult(Outcome.FAILED, ref.question, emptyList())
+                    ConversationMemory.Resolution.Same -> Unit
+                }
+                val command = if (before.isEmpty()) understood(said) else said
                 val navigation = NavigationSession.forGoal(command, app.places.mentionedIn(command), heard) ?: NavigationSession.forEta(command, heard)
                 val agent = Agent(app.llm, phone,
                     if (app.prefs.useRecipes) app.recipes else RecipeBook({ null }, {}),
@@ -183,7 +193,7 @@ class AgentService : Service() {
                     listener = listener, navigation = navigation)
                 // Tool first (deep links, media keys), the on-screen agent for everything else.
                 val assistant = Assistant(app.llm, AndroidTools(this@AgentService, phone, navigation, listener), app.places, agent, listener)
-                return try { assistant.run(command, before) } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                return try { assistant.run(command, before).also { memory.observe(command, it) } } catch (e: CancellationException) { throw e } catch (e: Exception) {
                     Log.e(TAG, "agent crashed", e)
                     AgentResult(Outcome.FAILED, "오류로 중단했어요: ${e.message}", emptyList())
                 }

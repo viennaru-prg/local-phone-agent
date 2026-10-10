@@ -579,6 +579,7 @@ class Agent(
             run.history += HistoryLine(description, reason); run.noChange++
             return reason to view
         }
+        StatusText.forStep(action.describe(view))?.let(listener::progress)
         val outcome: String
         val next: ScreenView
         when (action) {

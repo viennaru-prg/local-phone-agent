@@ -1,6 +1,8 @@
 package dev.localphone.agent
 
 import android.content.Context
+import android.content.SharedPreferences
+import dev.localphone.core.DisplayOptions
 
 /** User-editable knowledge and runtime options. Notes are plain sentences given to the AI as hints. */
 class Prefs(context: Context) {
@@ -51,6 +53,22 @@ class Prefs(context: Context) {
     var useRecipes: Boolean
         get() = sp.getBoolean("recipes", true)
         set(value) = sp.edit().putBoolean("recipes", value).apply()
+
+    var showGoal: Boolean
+        get() = sp.getBoolean("display_goal", true)
+        set(value) = sp.edit().putBoolean("display_goal", value).apply()
+    var showTask: Boolean
+        get() = sp.getBoolean("display_task", true)
+        set(value) = sp.edit().putBoolean("display_task", value).apply()
+    var showTotalUsage: Boolean
+        get() = sp.getBoolean("display_total", true)
+        set(value) = sp.edit().putBoolean("display_total", value).apply()
+    var showAiUsage: Boolean
+        get() = sp.getBoolean("display_ai", true)
+        set(value) = sp.edit().putBoolean("display_ai", value).apply()
+    val displayOptions get() = DisplayOptions(showGoal, showTask, showTotalUsage, showAiUsage)
+    fun registerDisplayListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) = sp.registerOnSharedPreferenceChangeListener(listener)
+    fun unregisterDisplayListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) = sp.unregisterOnSharedPreferenceChangeListener(listener)
 
     companion object {
         val DEFAULT_NOTES = """

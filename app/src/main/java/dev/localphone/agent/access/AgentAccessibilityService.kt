@@ -17,7 +17,9 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Button
 import android.widget.LinearLayout
-import android.widget.TextView
+import dev.localphone.agent.RunStatusView
+import dev.localphone.agent.app
+import dev.localphone.core.ResourceUsage
 import dev.localphone.core.Bounds
 import dev.localphone.core.RawNode
 import dev.localphone.core.ScrollDir
@@ -34,7 +36,11 @@ import kotlin.coroutines.resume
  */
 class AgentAccessibilityService : AccessibilityService() {
     private var overlay: LinearLayout? = null
-    private var status: TextView? = null
+    private var status: RunStatusView? = null
+    private var runGoal: String? = null
+    private var taskText = ""
+    private var usage: ResourceUsage? = null
+    private var importantStatus = false
     var onCancel: (() -> Unit)? = null
     @Volatile var observationDiagnostic: String = "not observed"; private set
 
@@ -275,15 +281,32 @@ class AgentAccessibilityService : AccessibilityService() {
 
     // ---------- status overlay ----------
 
-    fun showStatus(text: String) {
+    fun beginRun(goal: String) {
+        if (runGoal != goal) { runGoal = goal; usage = null }
+    }
+
+    fun showUsage(value: ResourceUsage) { usage = value; refreshDisplay() }
+    fun refreshDisplay() {
+        status?.render(runGoal, taskText, usage, app.prefs.displayOptions, importantStatus)
+        val panel = overlay ?: return
+        val params = panel.layoutParams as? WindowManager.LayoutParams ?: return
+        val width = if (status?.visibility == View.GONE) WindowManager.LayoutParams.WRAP_CONTENT else dp(320)
+        if (params.width != width) {
+            params.width = width
+            runCatching { getSystemService(WindowManager::class.java).updateViewLayout(panel, params) }
+        }
+    }
+
+    fun showStatus(text: String, important: Boolean = false) {
         if (instance !== this) return // A service rebind invalidates the previous overlay token.
+        taskText = text; importantStatus = important
         if (overlay == null) {
             val panel = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(14), dp(6), dp(6), dp(6))
                 background = GradientDrawable().apply { setColor(Color.argb(235, 30, 30, 36)); cornerRadius = dp(22).toFloat() }
             }
-            status = TextView(this).apply { setTextColor(Color.WHITE); textSize = 13f; maxLines = 2 }
+            status = RunStatusView(this)
             panel.addView(status, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             panel.addView(Button(this).apply { setText("중지"); textSize = 12f; setOnClickListener { onCancel?.invoke() } })
             val params = WindowManager.LayoutParams(dp(320), WindowManager.LayoutParams.WRAP_CONTENT,
@@ -301,14 +324,14 @@ class AgentAccessibilityService : AccessibilityService() {
             }
             overlay = panel
         }
-        status?.text = text
+        refreshDisplay()
     }
     /**
      * Shows [question] with one button per option and returns the chosen index, or null when the user
      * does not answer within [timeoutMs].
      */
     suspend fun ask(question: String, options: List<String>, timeoutMs: Long): Int? {
-        showStatus(question)
+        showStatus(question, important = true)
         val panel = overlay ?: return null
         val buttons = options.mapIndexed { i, label -> Button(this).apply { setText(label); textSize = 13f; tag = i } }
         val choice = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
@@ -326,6 +349,7 @@ class AgentAccessibilityService : AccessibilityService() {
     fun hideOverlay() {
         overlay?.let { runCatching { getSystemService(WindowManager::class.java).removeViewImmediate(it) } }
         overlay = null; status = null
+        runGoal = null; usage = null; taskText = ""; importantStatus = false
     }
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 

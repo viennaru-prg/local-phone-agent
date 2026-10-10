@@ -177,6 +177,13 @@ class SettingsActivity : Activity() {
         toggle("결과를 음성으로 말하기", app.prefs.speak) { app.prefs.speak = it }
         toggle("성공한 방법 기억해서 다음에 빠르게 실행", app.prefs.useRecipes) { app.prefs.useRecipes = it }
 
+        header("작업 중 표시")
+        toggle("원래 명령 표시", app.prefs.showGoal) { app.prefs.showGoal = it }
+        toggle("현재 작업 표시", app.prefs.showTask) { app.prefs.showTask = it }
+        toggle("휴대폰 전체 사용량 표시", app.prefs.showTotalUsage) { app.prefs.showTotalUsage = it }
+        toggle("AI 앱 사용량 표시", app.prefs.showAiUsage) { app.prefs.showAiUsage = it }
+        note("CPU·RAM 사용량은 작업 중에만 2초마다 갱신합니다. AI 앱은 모델을 포함한 비서 앱 전체입니다. CPU는 전체 코어 기준이며 GPU 사용률은 포함하지 않습니다. 기기에서 제공하지 않는 값은 —로 표시합니다.")
+
         header("AI 메모 (앱 사용 습관·위치 힌트)")
         val notes = EditText(this).apply {
             setText(app.prefs.notes); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE; minLines = 5; textSize = 14f

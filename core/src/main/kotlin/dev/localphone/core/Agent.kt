@@ -321,6 +321,8 @@ class Agent(
                     if (!Harness.authScreen(now)) { view = settle(run, now, waitForChange = false).first; break }
                 }
                 if (Harness.authScreen(view)) return fail(run, "잠금이 풀리지 않아 중단했어요.")
+                // The lock screen closing by itself (timeout, back) lands on the home screen: not unlocked.
+                if (view.snapshot.home) return fail(run, "잠금이 풀리지 않아 중단했어요. 잠금을 푼 뒤 다시 말씀해 주세요.")
                 run.history += HistoryLine("잠금 해제 기다림", "사용자가 잠금을 풂")
                 continue
             }

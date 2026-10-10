@@ -78,6 +78,11 @@ class HarnessTest {
         assertEquals("소프트웨어 정보", ShortcutGoals.screenName(info))
         assertEquals("디스플레이", ShortcutGoals.screenName("설정에서 디스플레이로 들어가줘"))
         assertNull(ShortcutGoals.screenName("갤러리에서 최근 사진 보여줘"))
+        val battery = "설정에서 배터리 정보 보여줘"
+        val batteryResults = view(battery, listOf("입력칸", "무엇을 찾고 있나요?", "value=배터리 정보"),
+            listOf("항목", "배터리 정보 · gesture controller view"), listOf("항목", "배터리 정보 표시 방법"), listOf("항목", "배터리 정보 · gesture controller view"))
+        assertEquals(AgentAction.Click(2), Harness.preDecide(battery, batteryResults, listOf(HistoryLine("open_app \"설정\"", "열림: 설정"),
+            HistoryLine("type \"무엇을 찾고 있나요?\" \"배터리 정보\" +enter", "화면 바뀜")))?.action)
         val display = "설정에서 디스플레이로 들어가줘"
         assertEquals(true, Harness.openScreenEvidence(display, view(display, listOf("텍스트", "디스플레이"), listOf("항목", "밝기"))))
         val results = view(display, listOf("입력칸", "무엇을 찾고 있나요?", "value=디스플레이"), listOf("항목", "디스플레이 · 최근 사용한 설정"), listOf("항목", "디스플레이"))

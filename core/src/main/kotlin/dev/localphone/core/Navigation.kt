@@ -30,6 +30,7 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
     private var previewSeen = false
     private var startAttempts = 0
     private var endSteps = 0
+    private var etaWaits = 0
     private var carouselScrolls = 0
     private var carouselSignature: Int? = null
     private var carouselEnd = false
@@ -86,7 +87,8 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
         val labels = view.elements.map { it.label }
         val time = labels.firstNotNullOfOrNull { Regex("(\\d+\\s*시간\\s*)?\\d+\\s*분").find(it)?.value }
             ?: labels.firstNotNullOfOrNull { Regex("\\d+\\s*시간").find(it)?.value } ?: return null
-        val distance = labels.firstNotNullOfOrNull { Regex("\\d+(?:\\.\\d+)?\\s*(?:km|㎞)").find(it)?.value }
+        // A place nearby reads in meters ("1분 350m").
+        val distance = labels.firstNotNullOfOrNull { Regex("\\d+(?:[.,]\\d+)?\\s*(?:km|㎞|m)(?![a-zA-Z])").find(it)?.value }
         val place = chosenSpoken ?: answered.lastOrNull() ?: names.first()
         return "${place}까지 차로 약 ${time.replace(Regex("\\s+"), " ")}${distance?.let { ", $it" } ?: ""} 걸려요."
     }
@@ -203,6 +205,8 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
                 it.enabled && it.kind != Kind.TEXT && Regex("^(?:종료|확인|안내\\s*종료)$").matches(it.label.trim())
             }?.let { endSteps++; return Harness.Auto(AgentAction.Click(it.id), "안내 종료 확인") }
             if (evidence.state in setOf("PROMPT", "ACTIVE_UNBOUND", "WRONG_DESTINATION", "GUIDANCE_VERIFIED", "STALE_GUIDANCE")) return null
+            // The place was picked for a travel-time question and the route preview is still drawing.
+            if (eta && targetPicked && etaWaits < 8) { etaWaits++; return Harness.Auto(AgentAction.Wait, "경로 미리보기가 뜨기를 기다림") }
             if (view.signature in resolvedScreens) return null
             val hits = view.elements.filter { e -> e.enabled && e.kind in setOf(Kind.ITEM, Kind.BUTTON) && matches(e.label) &&
                 !Regex("등록|수정|삭제|변경|설정").containsMatchIn(e.label) }
@@ -237,7 +241,9 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
             return null
         }
         if (!destinationBound) return null
-        if (eta) return null // a travel-time question stops at the preview (etaAnswer)
+        // A travel-time question stops at the preview (etaAnswer). The route list draws a moment after the
+        // preview itself: wait for its time instead of handing the half-drawn screen to the model.
+        if (eta) return if (etaAnswer(view) == null && etaWaits++ < 8) Harness.Auto(AgentAction.Wait, "경로 시간이 표시되기를 기다림") else null
         // A destination the model guessed waits here, on the preview, for the user's yes (confirmQuestion).
         if (chosen != null && !confirmed) return null
         val starts = view.elements.filter { isStart(it.label) }

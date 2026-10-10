@@ -93,7 +93,12 @@ object Harness {
         // No item starts with the name: a single category that mentions it ("연결 Wi-Fi • 블루투스 • SIM 관리").
         // Search results list "디스플레이" next to "디스플레이 · 최근 사용한 설정": the exact name wins.
         val exact = ShortcutGoals.screenName(goal)?.let(GoalText::normalize)
-        val item = hits.singleOrNull { GoalText.normalize(it.label) == exact } ?: hits.singleOrNull()
+        // A row may carry its container's name after " · " ("배터리 정보 · gesture controller view").
+        val item = hits.singleOrNull { GoalText.normalize(it.label) == exact }
+            // The same row listed under two sections ("폰 정보" and "배터리" both list 배터리 정보): either one.
+            ?: hits.filter { GoalText.normalize(it.label.substringBefore(" · ")) == exact }.takeIf { same ->
+                same.map { GoalText.normalize(it.label) }.distinct().size == 1 }?.firstOrNull()
+            ?: hits.singleOrNull()
             ?: candidates.filter(::named).singleOrNull()?.takeIf { hits.isEmpty() }
             ?: return null
         // Once more only if that press led to another screen that lists the item again (a settings search

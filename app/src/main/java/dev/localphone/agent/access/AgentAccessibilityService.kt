@@ -41,7 +41,10 @@ class AgentAccessibilityService : AccessibilityService() {
     private var taskText = ""
     private var usage: ResourceUsage? = null
     private var importantStatus = false
+    /** Stop for the running command; the overlay's 중지 button shows only while there is one. */
     var onCancel: (() -> Unit)? = null
+        set(value) { field = value; stopButton?.visibility = if (value == null) View.GONE else View.VISIBLE }
+    private var stopButton: Button? = null
     @Volatile var observationDiagnostic: String = "not observed"; private set
 
     // Window id of recent observations, used to find the node an action targets on the live screen.
@@ -308,7 +311,10 @@ class AgentAccessibilityService : AccessibilityService() {
             }
             status = RunStatusView(this)
             panel.addView(status, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            panel.addView(Button(this).apply { setText("중지"); textSize = 12f; setOnClickListener { onCancel?.invoke() } })
+            panel.addView(Button(this).apply {
+                setText("중지"); textSize = 12f; setOnClickListener { onCancel?.invoke() }
+                visibility = if (onCancel == null) View.GONE else View.VISIBLE
+            }.also { stopButton = it })
             val params = WindowManager.LayoutParams(dp(320), WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 // Keep the screen on while a command runs; a dozing phone freezes the model mid-task.

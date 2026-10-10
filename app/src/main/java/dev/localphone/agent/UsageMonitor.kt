@@ -18,10 +18,12 @@ internal class UsageMonitor(private val context: Context, private val scope: Cor
         if (!options.needsSampling) return
         val reader = UsageSampler(context).also { sampler = it }
         job = scope.launch {
+            // CPU is a difference between two reads: the second comes quickly so a short command shows it too.
+            var first = true
             while (isActive) {
                 val usage = withContext(Dispatchers.IO) { reader.read(options.total, options.ai) }
                 ensureActive(); update(usage)
-                delay(INTERVAL_MS)
+                delay(if (first) FIRST_DELTA_MS else INTERVAL_MS); first = false
             }
         }
     }
@@ -34,5 +36,5 @@ internal class UsageMonitor(private val context: Context, private val scope: Cor
         sampler = null
     }
 
-    companion object { const val INTERVAL_MS = 2_000L }
+    companion object { const val INTERVAL_MS = 2_000L; const val FIRST_DELTA_MS = 500L }
 }

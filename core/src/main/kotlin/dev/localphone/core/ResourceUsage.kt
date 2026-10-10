@@ -11,7 +11,8 @@ data class ResourceUsage(
     val totalCpu: Int? = null, val usedRam: Long? = null, val totalRam: Long? = null,
     val appCpu: Int? = null, val appRam: Long? = null,
 ) {
-    val totalLine get() = "전체 CPU ${percent(totalCpu)} · RAM ${usedRam?.let(::memory) ?: "—"}/${totalRam?.let(::memory) ?: "—"}"
+    // Android 8+ keeps /proc/stat from apps: whole-device CPU is then left out instead of a lasting "—".
+    val totalLine get() = "전체 ${totalCpu?.let { "CPU $it% · " }.orEmpty()}RAM ${usedRam?.let(::memory) ?: "—"}/${totalRam?.let(::memory) ?: "—"}"
     val aiLine get() = "AI 앱 CPU ${percent(appCpu)} · RAM ${appRam?.let(::memory) ?: "—"}"
     private fun percent(value: Int?) = value?.let { "$it%" } ?: "—"
     private fun memory(bytes: Long): String = if (bytes < 1_073_741_824L) "${bytes / 1_048_576}M" else {

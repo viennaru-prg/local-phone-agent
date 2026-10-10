@@ -112,6 +112,8 @@ object GoalText {
      */
     fun spokenResult(goal: String, modelSay: String): String {
         ShortcutGoals.literalSearch(goal)?.let { return "'$it' 검색했어요." }
+        // "설정에서 디스플레이로 들어가줘" → "디스플레이 열었어요.", not the whole request echoed back.
+        ShortcutGoals.screenName(goal)?.takeIf { !Regex("화면|메뉴|탭|페이지").containsMatchIn(goal) }?.let { return "$it 열었어요." }
         if (ShortcutGoals.screenName(goal) != null || DirectGoals.appName(goal) != null) {
             val names = targetWords(goal).filter { it !in setOf("화면", "메뉴", "탭", "페이지", "보여", "열어", "앱") }
             if (names.isNotEmpty()) {

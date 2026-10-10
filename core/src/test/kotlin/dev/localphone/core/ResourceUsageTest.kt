@@ -21,7 +21,7 @@ class ResourceUsageTest {
     @Test fun unavailableMetricsAreNotPresentedAsZero() {
         assertNull(UsageMath.cpuTicks(null)); assertNull(UsageMath.cpuTicks("cpu unavailable"))
         assertNull(UsageMath.totalCpu(null, UsageMath.CpuTicks(10, 4)))
-        assertTrue(ResourceUsage().totalLine.contains("CPU —"))
+        assertEquals("전체 RAM —/—", ResourceUsage().totalLine)
         assertFalse(ResourceUsage().aiLine.contains("0%"))
     }
     @Test fun disablingBothUsageRowsDisablesSamplingIndependentlyOfTextRows() {

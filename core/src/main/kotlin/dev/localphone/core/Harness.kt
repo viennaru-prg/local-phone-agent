@@ -90,15 +90,18 @@ object Harness {
         // Every word of the name, not one of them: "보안 및 개인정보 보호" is not "소프트웨어 정보".
         fun named(e: Element) = names.all { GoalText.matches(e.label, listOf(it)) }
         val hits = candidates.filter { e -> named(e) && GoalText.variants(names.first()).any { GoalText.normalize(e.label).startsWith(it) } }
-        // No item starts with the name: a single category that mentions it ("연결 Wi-Fi • 블루투스 • SIM 관리").
         // Search results list "디스플레이" next to "디스플레이 · 최근 사용한 설정": the exact name wins.
         val exact = ShortcutGoals.screenName(goal)?.let(GoalText::normalize)
-        // A row may carry its container's name after " · " ("배터리 정보 · gesture controller view").
+        val tab = Regex("탭|tab", RegexOption.IGNORE_CASE)
         val item = hits.singleOrNull { GoalText.normalize(it.label) == exact }
-            // The same row listed under two sections ("폰 정보" and "배터리" both list 배터리 정보): either one.
+            // A row may carry its container's name after " · " ("배터리 정보 · gesture controller view"), and
+            // the same row may be listed under two sections (폰 정보 and 배터리 both list 배터리 정보): either one.
             ?: hits.filter { GoalText.normalize(it.label.substringBefore(" · ")) == exact }.takeIf { same ->
                 same.map { GoalText.normalize(it.label) }.distinct().size == 1 }?.firstOrNull()
+            // "저장 탭 열어줘": the bottom tab "저장 탭 저장", not the map's "저장 레이어 끄기".
+            ?: hits.takeIf { tab.containsMatchIn(goal) }?.singleOrNull { tab.containsMatchIn(it.label) }
             ?: hits.singleOrNull()
+            // No item starts with the name: a single category that mentions it ("연결 Wi-Fi • 블루투스 • SIM 관리").
             ?: candidates.filter(::named).singleOrNull()?.takeIf { hits.isEmpty() }
             ?: return null
         // Once more only if that press led to another screen that lists the item again (a settings search
@@ -444,6 +447,10 @@ object Harness {
     private fun searchScreen(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
         val name = ShortcutGoals.screenName(goal) ?: return null
         if (GoalText.namedApp(goal) == null || view.snapshot.home || history.none { it.action.startsWith("open_app") }) return null
+        // Something here already carries the name (two "저장…" controls the harness could not tell apart):
+        // that is the model's choice to make, not a reason to search.
+        val names = GoalText.targetWords(goal).filter { it !in generic && it.length >= 2 }
+        if (view.elements.any { e -> e.kind != Kind.INPUT && names.isNotEmpty() && names.all { GoalText.matches(e.label, listOf(it)) } }) return null
         val since = history.indexOfLast { it.action.startsWith("open_app") }
         val searching = Regex("^(?:type |click \"[^\"]*(?:검색|search))", RegexOption.IGNORE_CASE)
         if (history.drop(since + 1).any { Skills.realAction.containsMatchIn(it.action) && it.action != "wait" && !searching.containsMatchIn(it.action) }) return null

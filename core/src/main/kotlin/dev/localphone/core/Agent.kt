@@ -773,6 +773,9 @@ object Guard {
     private val delete = Regex("삭제|delete|remove|제거|초기화|reset", RegexOption.IGNORE_CASE)
     private val swap = Regex("출발지.*도착지.*(?:전환|변경|바꾸기)|swap", RegexOption.IGNORE_CASE)
     private val install = Regex("설치|업데이트|새\\s*버전|install|update", RegexOption.IGNORE_CASE)
+    // Call buttons and phone numbers, not menus that merely mention a phone ("휴대전화 정보").
+    private val call = Regex("^\\s*(?:전화|통화|음성\\s*통화|영상\\s*통화)\\s*(?:걸기|하기)?\\s*$|전화\\s*(?:걸기|하기|번호)|문자\\s*보내|" +
+        "^\\s*\\+?\\d{2,4}[-\\s]\\d{3,4}[-\\s]\\d{4}|^\\s*(?:call|dial)\\b", RegexOption.IGNORE_CASE)
     private val create = Regex("^(?:등록|수정)$|만들기|생성|새로\\s*만들|이름\\s*변경|편집|\\bcreate\\b|\\brename\\b|\\bedit\\b", RegexOption.IGNORE_CASE)
     fun blocked(goal: String, action: AgentAction, view: ScreenView): String? {
         if (action is AgentAction.Media && !Router.allowsMedia(goal)) return "명령에 없는 미디어 동작이라 실행하지 않음"
@@ -798,6 +801,10 @@ object Guard {
             return "목표에 없는 만들기·편집 동작이라 실행하지 않음"
         // An app's "새 버전 1.1.108을 설치할 수 있습니다" banner led into the unknown-sources settings.
         if (install.containsMatchIn(label) && !install.containsMatchIn(goal)) return "목표에 없는 설치·업데이트라 누르지 않음"
+        // A place page's phone number opened the dialer during "이담한정식까지 얼마나 걸려": calling and
+        // messaging someone happen only when the user asks for it.
+        if (call.containsMatchIn(label) && !Regex("전화|통화|연락|문자|메시지|call|dial", RegexOption.IGNORE_CASE).containsMatchIn(goal))
+            return "목표에 없는 전화·문자 동작이라 누르지 않음"
         // Deleting is allowed only when the user asked to remove something ("빼줘", "삭제해줘", ...).
         // Adding: only a result that names the requested song (the model once added a stale result).
         (GoalText.playlistAdd(goal, Harness.isPlayer(view)) ?: GoalText.playSong(goal))?.let { query ->

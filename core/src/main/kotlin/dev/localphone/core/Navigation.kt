@@ -53,7 +53,22 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
      * No saved place matches the name as heard, the whole list was seen: the places for the model to
      * judge against (speech can mishear "수요모임" as "수유 모임"). Null when there is nothing to ask.
      */
-    fun choiceNeeded(): List<String>? = seenPlaces.toList().takeIf { carouselEnd && !choiceAsked && chosen == null && it.isNotEmpty() }
+    fun choiceNeeded(): List<String>? = seenPlaces.filter(::soundsNear).takeIf { carouselEnd && !choiceAsked && chosen == null && it.isNotEmpty() }
+
+    /**
+     * A saved place worth the model's judgment shares a sound with what was heard ("수요모…" for "수유
+     * 모임"). With none ("이담한정식" against 집·회사·수원집) the model only guessed (it picked 수원집): the
+     * name is looked up in the map's own search instead, which also knows the user's saved lists.
+     */
+    private fun soundsNear(place: String): Boolean {
+        val said = (names + heard).flatMap { GoalText.normalize(it).filter { c -> c in '가'..'힣' }.toList() }.toSet()
+        return GoalText.normalize(place.removeSuffix("…")).any { it in '가'..'힣' && it in said }
+    }
+    private var searchSteps = 0
+    private var nameTyped = false
+    /** The route button of a searched place was pressed; its 확인 sets it as the destination. */
+    private var resultRouted = false
+    private var resultConfirmed = false
 
     private var confirmed = false
     /** A name the user gave when answering "…로 안내할까요?" with another place ("아니, 수요모임"). */
@@ -119,7 +134,7 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
     /** The model's pick (null = none of them): page back through the list to it. */
     fun choose(place: String?) {
         choiceAsked = true
-        if (place == null) return
+        if (place == null || !soundsNear(place)) return
         chosen = place
         // Collection ended at the list's start (paging back): look for the pick going forward again.
         carouselEnd = false; carouselScrolls = 0; carouselSignature = null; pageBack = !collectedBack
@@ -205,13 +220,25 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
                 it.enabled && it.kind != Kind.TEXT && Regex("^(?:종료|확인|안내\\s*종료)$").matches(it.label.trim())
             }?.let { endSteps++; return Harness.Auto(AgentAction.Click(it.id), "안내 종료 확인") }
             if (evidence.state in setOf("PROMPT", "ACTIVE_UNBOUND", "WRONG_DESTINATION", "GUIDANCE_VERIFIED", "STALE_GUIDANCE")) return null
-            // The place was picked for a travel-time question and the route preview is still drawing.
-            if (eta && targetPicked && etaWaits < 8) { etaWaits++; return Harness.Auto(AgentAction.Wait, "경로 미리보기가 뜨기를 기다림") }
-            if (view.signature in resolvedScreens) return null
-            val hits = view.elements.filter { e -> e.enabled && e.kind in setOf(Kind.ITEM, Kind.BUTTON) && matches(e.label) &&
+            val named = view.elements.filter { e -> e.enabled && e.kind in setOf(Kind.ITEM, Kind.BUTTON) && matches(e.label) &&
                 !Regex("등록|수정|삭제|변경|설정").containsMatchIn(e.label) }
+            // A search box at the top echoes the name ("이담한정식"); with a result below it, the result is the place.
+            fun echo(e: Element) = e.bounds.bottom <= view.snapshot.height * 0.15 && names.any { GoalText.normalize(e.label) == GoalText.normalize(it) }
+            val hits = named.filterNot(::echo).takeIf { below -> below.isNotEmpty() && below.size < named.size } ?: named
+            // A searched place set as the destination asks for confirmation (NAVER: the place, its address, 확인).
+            if (resultRouted && !resultConfirmed) view.elements.singleOrNull { it.enabled && it.kind != Kind.TEXT && it.label.trim() == "확인" }
+                ?.takeIf { view.elements.any { e -> matches(e.label) } }
+                ?.let { targetPicked = true; resultConfirmed = true; return Harness.Auto(AgentAction.Click(it.id), "검색한 장소를 도착지로 확인") }
+            // The place was picked for a travel-time question and the route preview is still drawing.
+            if (eta && targetPicked && hits.isEmpty() && etaWaits < 8) { etaWaits++; return Harness.Auto(AgentAction.Wait, "경로 미리보기가 뜨기를 기다림") }
+            if (view.signature in resolvedScreens) return null
             val target = hits.filter { e -> names.any { GoalText.normalize(e.label) == GoalText.normalize(it) } }.singleOrNull()
                 ?: hits.singleOrNull()
+            // A search result row ("이담한정식 4.3km 한정식 …") carries its own route button: that sets it as
+            // the destination, where pressing the row only opens the place's page.
+            if (target != null && !resultRouted && names.none { GoalText.normalize(target.label) == GoalText.normalize(it) }) view.elements
+                .singleOrNull { it.enabled && it.kind == Kind.BUTTON && GoalText.normalize(it.label) in setOf("길찾기", "도착") }
+                ?.let { resultRouted = true; return Harness.Auto(AgentAction.Click(it.id), "검색 결과 '${target.label.take(20)}'을 도착지로 길찾기") }
             if (target != null) return Harness.Auto(AgentAction.Click(target.id),
                 if (chosen != null) "모델이 고른 저장 장소 '${target.label}'" else "현재 지도에서 요청한 목적지 항목이 하나로 확인됨")
             // Home/work and frequent destinations are listed behind the app's route entry (NAVER: 길찾기):
@@ -237,6 +264,20 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
                     val dir = if (pageBack) ScrollDir.LEFT else ScrollDir.RIGHT
                     return Harness.Auto(AgentAction.Scroll(dir, carousel.id), "자주 가는 곳 목록을 넘겨 '${chosen ?: names.first()}' 찾기")
                 }
+                // Every place was seen and none sounds like the name: nothing for the model to judge.
+                if (carouselEnd && chosen == null && !choiceAsked && seenPlaces.none(::soundsNear)) choiceAsked = true
+            }
+            // Not among the frequent places: type the name as the destination ("저장" lists and any place
+            // by name). The result named so is then pressed like a frequent place.
+            if (choiceAsked && chosen == null && !targetPicked && searchSteps < 4) {
+                val input = view.inputs.firstOrNull { it.enabled }
+                if (input != null && !nameTyped && targetSearchOpened) {
+                    nameTyped = true; searchSteps++
+                    return Harness.Auto(AgentAction.Type(input.id, names.first(), true), "자주 가는 곳에 없는 '${names.first()}'을 도착지로 검색")
+                }
+                if (!nameTyped) view.elements.firstOrNull { e ->
+                    e.enabled && e.kind != Kind.TEXT && Regex("^(?:도착지|목적지)\\s*(?:입력|검색)?$").matches(e.label.trim())
+                }?.let { searchSteps++; return Harness.Auto(AgentAction.Click(it.id), "도착지 입력란을 열어 '${names.first()}' 찾기") }
             }
             return null
         }

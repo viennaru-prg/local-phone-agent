@@ -100,7 +100,8 @@ class NavigationTest {
         s.observe(second); assertEquals(ScrollDir.LEFT, (s.nextAction(second, 0)?.action as AgentAction.Scroll).dir)
         s.observe(first); assertTrue(s.nextAction(first, 0)?.action is AgentAction.Scroll)
         s.observe(first); assertNull(s.nextAction(first, 0)) // both ends seen, nothing named "수유 모임"
-        assertEquals(listOf("집", "회사", "수요모…", "일요모…", "수원집"), s.choiceNeeded())
+        // Only places sharing a sound with "수유 모임" are worth judging (집 and 회사 share none).
+        assertEquals(listOf("수요모…", "일요모…", "수원집"), s.choiceNeeded())
         // The model judged 3 = 수요모…; the harness walks to it and presses it.
         s.choose("수요모…")
         assertNull(s.choiceNeeded())
@@ -149,13 +150,16 @@ class NavigationTest {
         assertEquals("수요모…", v.element((s.nextAction(v, 0)?.action as AgentAction.Click).id)?.label)
     }
 
-    @Test fun theCarouselEndStopsPaging() {
+    @Test fun theCarouselEndStopsPagingThenTheNameIsLookedUp() {
         val s = NavigationSession.forGoal("부산 별장으로 안내해줘")!!
         val v = frequents("집", "회사")
         s.observe(v); assertTrue(s.nextAction(v, 0)?.action is AgentAction.Scroll)
         s.observe(v); assertEquals(ScrollDir.LEFT, (s.nextAction(v, 0)?.action as AgentAction.Scroll).dir) // right end: back to the start
-        s.observe(v); assertNull(s.nextAction(v, 0)) // both ends: the list is done
-        assertEquals(listOf("집", "회사"), s.choiceNeeded())
+        // Both ends seen and nothing sounds like "부산 별장": no guess, the name goes into the destination field.
+        s.observe(v); assertEquals("도착지 입력", v.element((s.nextAction(v, 0)?.action as AgentAction.Click).id)?.label)
+        assertNull(s.choiceNeeded())
+        // A model guess that shares no sound with the name is not taken either.
+        s.choose("회사"); assertNull(s.choiceNeeded())
     }
 
     @Test fun aJustOpenedMapIsGivenTimeToReturnToItsGuidanceBeforeSayingThereIsNone() {

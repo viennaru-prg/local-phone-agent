@@ -22,9 +22,19 @@ object ShortcutGoals {
         if (GoalScope.multiple(goal)) return null
         val text = body(goal)
         if (qualified.containsMatchIn(text)) return null
-        return Regex("^(.+?)\\s*(?:설정\\s*)?(?:화면|메뉴|탭|페이지)\\s*(?:열어|보여|들어가)(?:\\s*줘|\\s*주세요)?\\s*[.!?]?$")
-            .matchEntire(text)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
+        Regex("^(.+?)\\s*(?:설정\\s*)?(?:화면|메뉴|탭|페이지)\\s*(?:열어|보여|들어가)(?:\\s*줘|\\s*주세요)?\\s*[.!?]?$")
+            .matchEntire(text)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        // Inside a named app a short place is a screen too: "설정에서 디스플레이 들어가줘", "설정에서 소프트웨어
+        // 정보 보여줘". "보여줘" alone also asks for content ("갤러리에서 최근 사진 보여줘"), so with it the
+        // name must end in a page noun.
+        if (GoalText.namedApp(goal) == null) return null
+        val m = Regex("^(.+?)\\s*(열어|들어가|보여)(?:\\s*줘|\\s*주세요)?\\s*[.!?]?$").matchEntire(text) ?: return null
+        val name = m.groupValues[1].trim().replace(Regex("(?:을|를|으로|로)$"), "").trim()
+        if (name.isEmpty() || name.split(Regex("\\s+")).size > 3) return null
+        if (m.groupValues[2] == "보여" && !pageNoun.containsMatchIn(name)) return null
+        return name
     }
+    private val pageNoun = Regex("(?:정보|설정|목록|기록|내역|관리|사용량|옵션)$")
 
     /** Search submission only, with no selection/ranking constraint. '찾아줘' is a general task. */
     fun literalSearch(goal: String): String? {

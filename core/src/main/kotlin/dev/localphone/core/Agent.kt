@@ -131,6 +131,7 @@ class Agent(
         }
         // Hard evidence first: a search is not done while the query appears nowhere on screen.
         if (Harness.openScreenEvidence(goal, view)) return Verdict(true, GoalText.spokenResult(goal, ""))
+        if (Harness.screenStillListed(goal, view)) return Verdict(false, "요청한 화면이 아직 눌러야 할 항목으로 보임")
         if (!Harness.searchShown(goal, view)) return Verdict(false, "검색어가 화면에 아직 없음")
         // A plain single search ("X에서 Y 검색해줘") is done once Y was submitted and is on screen.
         ShortcutGoals.literalSearch(goal)?.let { query ->
@@ -384,6 +385,8 @@ class Agent(
                 if ((run.ineffective[fingerprint to "back"] ?: 0) > 0) add("back")
                 // "open_app 설정" seven times in a row while 설정 was already in front.
                 if (run.history.lastOrNull()?.let { it.action.startsWith("open_app") && (it.outcome.contains("이미 열려") || it.outcome.contains("찾지 못함")) } == true) add("open")
+                // An inspect that found nothing more on this screen finds nothing the next time either.
+                if (run.history.lastOrNull()?.let { it.action.startsWith("inspect") && it.outcome.contains("추가 관찰 정보 없음") } == true) add("inspect")
                 if (navigation == null && !CompletionGrounding.hasOutcome(goal,view,run.history)) add("done")
             }
             val raw = model.decide(prompt, ActionGrammar.forView(view, config.withNote, excluded, excludedLong, excludedOps))
@@ -473,6 +476,9 @@ class Agent(
         val alreadyThere = action is AgentAction.Click && outcome.startsWith("변화 없음") &&
             GoalText.opensScreen(goal) && GoalText.matches(label, target)
         val dataChanged = StateMutation.changed(action, view, next)
+        // A screen goal found through the app's search ("설정에서 소프트웨어 정보 보여줘") still has to open
+        // the result: the list of matches is not the screen.
+        if (action is AgentAction.Type && ShortcutGoals.screenName(goal) != null && ShortcutGoals.searchPrefix(goal) == null) return null
         if (!alreadyThere && !outcome.contains("바뀜") && !(action is AgentAction.OpenApp && outcome.startsWith("열림")) &&
             !(semanticCheck && outcome.startsWith("변화 없음"))) return null
         val resultAppeared = navigation == null && !CompletionGrounding.hasOutcome(goal, view, run.history) &&

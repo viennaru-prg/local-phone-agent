@@ -46,7 +46,19 @@ class LlamaModel(private val app: AgentApp) : LanguageModel {
     }
     val loaded get() = handle != 0L
 
-    fun prewarm() { scope.launch { runCatching { mutex.withLock { ensureLoaded() } }.onFailure { Log.w(TAG, "prewarm", it) } } }
+    /** Loads the model and decodes the step system prompt while the user is still speaking. */
+    fun prewarm() { scope.launch { runCatching { mutex.withLock { ensureLoaded(); warmPrefix() } }.onFailure { Log.w(TAG, "prewarm", it) } } }
+
+    /** The step system prompt is the long shared prefix of every step; cold, it costs ~14 s of prefill. */
+    private suspend fun warmPrefix() {
+        if (straggler != null) return
+        val text = frame(ModelPrompt(Prompts.system(app.prefs.withNote), ""), loadedFile!!.name)
+        val t0 = System.currentTimeMillis()
+        LlamaNative.reset(handle)
+        withContext(Dispatchers.IO) { LlamaNative.infer(handle, text.toByteArray(), 0, ByteArray(0), STEP_TIMEOUT_MS, 0) }
+        val m = LlamaNative.metrics(handle)
+        Log.i(TAG, "warm prefix tokens=${m[0]} reused=${m[1]} in ${System.currentTimeMillis() - t0}ms")
+    }
 
     private suspend fun ensureLoaded() {
         idleJob?.cancel()
@@ -80,17 +92,34 @@ class LlamaModel(private val app: AgentApp) : LanguageModel {
         val h = handle
         LlamaNative.reset(h)
         val maxTokens = if (think) 200 + app.prefs.thinkChars else 200
-        val contextSlot=if(prompt.system==Prompts.VERIFY_SYSTEM) 1 else 0
-        val job = scope.async(Dispatchers.IO) { LlamaNative.infer(h, text.toByteArray(), maxTokens, thinkingGrammar(grammar).toByteArray(), STEP_TIMEOUT_MS,contextSlot) }
+        // Slot 0 keeps the step prompt's long system prefix warm; every side question (verify, place
+        // choice) goes to slot 1 so it cannot evict that prefix (a cold step prefill takes ~14 s).
+        val contextSlot = if (prompt.system == Prompts.SYSTEM || prompt.system == Prompts.SYSTEM_NO_NOTE) 0 else 1
+        val bytes = text.toByteArray()
+        val grammarBytes = thinkingGrammar(grammar).toByteArray()
         try {
-            val out = withTimeoutOrNull(STEP_TIMEOUT_MS + 5_000) { job.await() }
-            if (out == null) {
-                LlamaNative.cancel(h); straggler = job
-                throw IllegalStateException("AI 응답이 너무 늦어 중단했어요. 휴대폰 메모리가 부족할 수 있어요.")
+            // A native timeout keeps the decoded part of the prompt in the slot, so one more attempt only
+            // continues where the first stopped (a cold, crowded screen can need a little over 30 s).
+            for (attempt in 1..2) {
+                val job = scope.async(Dispatchers.IO) { LlamaNative.infer(h, bytes, maxTokens, grammarBytes, STEP_TIMEOUT_MS, contextSlot) }
+                val out = try {
+                    withTimeoutOrNull(STEP_TIMEOUT_MS + 5_000) { job.await() }
+                } catch (e: CancellationException) {
+                    LlamaNative.cancel(h); straggler = job; throw e
+                } catch (e: IllegalStateException) {
+                    if (e.message != "inference timeout") throw e
+                    Log.w(TAG, "inference timeout, attempt $attempt")
+                    if (attempt == 2) throw IllegalStateException(TOO_SLOW)
+                    LlamaNative.reset(h)
+                    continue
+                }
+                if (out == null) {
+                    LlamaNative.cancel(h); straggler = job
+                    throw IllegalStateException(TOO_SLOW)
+                }
+                return@withLock String(out).also { lastThought = it.substringBefore("</think>", "").removePrefix("<think>").trim() }.let(::stripThink)
             }
-            String(out).also { lastThought = it.substringBefore("</think>", "").removePrefix("<think>").trim() }.let(::stripThink)
-        } catch (e: CancellationException) {
-            LlamaNative.cancel(h); straggler = job; throw e
+            throw IllegalStateException(TOO_SLOW)
         } finally {
             val m = LlamaNative.metrics(h)
             lastStats = InferenceStats(m[0], m[1], m[2], m[3], m[4])
@@ -147,5 +176,6 @@ class LlamaModel(private val app: AgentApp) : LanguageModel {
     companion object {
         private const val TAG = "AgentLlm"
         const val STEP_TIMEOUT_MS = 30_000L
+        private const val TOO_SLOW = "AI 응답이 너무 늦어 중단했어요. 휴대폰 메모리가 부족할 수 있어요."
     }
 }

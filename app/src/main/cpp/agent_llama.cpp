@@ -41,9 +41,12 @@ static bool should_abort(void * data) {
     auto * rt = static_cast<Runtime *>(data);
     return rt->cancelled.load() || std::chrono::steady_clock::now() >= rt->deadline;
 }
+// A timeout or cancel stops between decodes: the slot's cached tokens still match its KV cache, so a
+// retry continues the prefill from there instead of starting cold.
+struct Interrupted : std::runtime_error { using std::runtime_error::runtime_error; };
 static void check(Runtime * rt) {
-    if (rt->cancelled.load()) throw std::runtime_error("cancelled");
-    if (std::chrono::steady_clock::now() >= rt->deadline) throw std::runtime_error("inference timeout");
+    if (rt->cancelled.load()) throw Interrupted("cancelled");
+    if (std::chrono::steady_clock::now() >= rt->deadline) throw Interrupted("inference timeout");
 }
 // Stop as soon as the grammar produced one complete JSON object (after any <think> block).
 static bool complete_json(const std::string & all) {
@@ -183,12 +186,15 @@ Java_dev_localphone_agent_llm_LlamaNative_infer(JNIEnv * env, jobject, jlong han
             slot.cached.push_back(tok);
         }
         rt->timing[4] = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t1).count();
-        if (!finished) throw std::runtime_error("output token limit reached");
+        // max_tokens 0 only fills the cache with the prompt (warming a shared prefix ahead of use).
+        if (!finished && max_tokens > 0) throw std::runtime_error("output token limit reached");
         LOG("slot=%d prompt=%lld reused=%lld out=%lld prefill=%lldms gen=%lldms", context_slot, (long long) rt->timing[0], (long long) rt->timing[1],
             (long long) rt->timing[2], (long long) rt->timing[3], (long long) rt->timing[4]);
         auto result = env->NewByteArray(out.size());
         env->SetByteArrayRegion(result, 0, out.size(), reinterpret_cast<const jbyte *>(out.data()));
         return result;
+    } catch (const Interrupted & e) {
+        throw_java(env, e); return nullptr;
     } catch (const std::exception & e) {
         if (rt && context_slot >= 0 && context_slot < (int) rt->contexts.size()) {
             auto & slot = rt->contexts[context_slot];

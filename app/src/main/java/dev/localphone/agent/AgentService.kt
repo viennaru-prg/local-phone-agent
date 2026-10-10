@@ -272,7 +272,19 @@ class Trace(dir: File, goal: String, metadata: Map<String, Any?> = emptyMap()) {
     private var finished = false
     private val session = java.util.UUID.randomUUID().toString()
     private val file = File(dir, SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(Date()) + "-$session.jsonl")
-    init { write(mapOf("type" to "start", "goal" to goal, "metadata" to metadata, "sessionId" to session)) }
+    init {
+        prune(dir)
+        write(mapOf("type" to "start", "goal" to goal, "metadata" to metadata, "sessionId" to session))
+    }
+
+    companion object {
+        const val KEEP = 1000
+        /** Keeps the newest [KEEP] runs; names start with their time, so the oldest sort first. */
+        fun prune(dir: File) = runCatching {
+            val runs = dir.listFiles { f -> f.isFile && f.name.endsWith(".jsonl") }?.sortedBy { it.name } ?: return@runCatching
+            runs.take((runs.size - (KEEP - 1)).coerceAtLeast(0)).forEach { it.delete() }
+        }.onFailure { Log.w("AgentStep", "trace prune failed", it) }
+    }
     fun step(r: StepRecord, stats: Any?) {
         Log.i("AgentStep", "${r.index} [${r.source}] ${r.action} → ${r.outcome} (${r.note}) model=${r.modelMs}ms")
         write(mapOf("type" to "step", "record" to r, "stats" to stats))

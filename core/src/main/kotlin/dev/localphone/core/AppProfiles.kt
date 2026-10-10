@@ -63,6 +63,10 @@ object AppProfiles {
         if (merged.isNotEmpty()) learn(packageName, key, merged.joinToString("|"))
     }
 
+    /** A remembered list, newest first ("places" → 수요모임, 이담한정식, …). */
+    fun recall(packageName: String, key: String): List<String> =
+        synchronized(learned) { learned[packageName]?.get(key) }?.split('|')?.filter { it.isNotBlank() }.orEmpty()
+
     /**
      * Words the speech recognizer should expect: app names from the profiles and every place the
      * agent has driven to or seen in full ("일요모임" was heard as "이름 모임" without this).

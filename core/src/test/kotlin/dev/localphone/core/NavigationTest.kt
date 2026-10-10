@@ -14,6 +14,8 @@ private fun navView(vararg labels: String, enabled: Boolean = true, textStart: B
 }
 
 class NavigationTest {
+    @BeforeTest fun forget() = AppProfiles.restore(emptyMap())
+
     @Test fun routeSelectionUsesTheLiveOfficeShortcutWithoutALocalPlace() {
         val s = session()
         val main = navView("길찾기", "검색")
@@ -141,6 +143,24 @@ class NavigationTest {
         assertFalse(GoalText.missingDestination("일요 모임으로 안내해 줘"))
         assertEquals("일요모임으로 안내해줘", GoalText.navigationGoalFrom("일요모임"))
         assertEquals("회사로 안내해줘", GoalText.navigationGoalFrom("회사로 가줘"))
+    }
+
+    @Test fun aCutPickIsSpokenWithTheFullNameDrivenToBefore() {
+        AppProfiles.restore(mapOf(NavigationSession.NAVER_MAP to mapOf("places" to "이담한정식|수요모임")))
+        val s = NavigationSession.forGoal("수유 모임으로 안내해줘")!!
+        s.choose("수요모…")
+        assertEquals("수요모임으로 안내를 시작했어요.", s.spokenStart)
+    }
+
+    @Test fun aRememberedListWithoutTheNameIsNotPagedAgain() {
+        AppProfiles.restore(mapOf(NavigationSession.NAVER_MAP to mapOf("frequents" to "집|회사|수요모…|일요모…|수원집")))
+        val s = NavigationSession.forGoal("이담한정식으로 안내해줘")!!
+        val v = frequents("집", "회사", "수요모…")
+        s.observe(v)
+        assertEquals("도착지 입력", v.element((s.nextAction(v, 0)?.action as AgentAction.Click).id)?.label)
+        // A name that is on the list (or sounds like one) still pages to it.
+        val near = NavigationSession.forGoal("수원집으로 안내해줘")!!
+        near.observe(v); assertTrue(near.nextAction(v, 0)?.action is AgentAction.Scroll)
     }
 
     @Test fun aCutNameInTheCarouselStillMatches() {

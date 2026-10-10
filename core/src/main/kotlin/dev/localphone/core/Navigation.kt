@@ -75,9 +75,18 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
     private val answered = mutableListOf<String>()
 
     /** The model's pick, said naturally: the preview's full name, else the heard name it starts with. */
-    private val chosenSpoken: String? get() = chosen?.let { c ->
-        chosenFull ?: if (!c.endsWith("…")) c else (heard + names).firstOrNull { GoalText.normalize(it).startsWith(GoalText.normalize(c.removeSuffix("…"))) }
-            ?: c.removeSuffix("…")
+    private val chosenSpoken: String? get() = chosen?.let { c -> chosenName ?: c.removeSuffix("…") }
+
+    /**
+     * The model's pick in full: the preview's name, a heard name it starts with, or a full name driven
+     * to before ("수요모…" → 수요모임 remembered from "수요모임으로 안내해줘"). Null while only the cut label is known.
+     */
+    private val chosenName: String? get() = chosen?.let { c ->
+        if (!c.endsWith("…")) return@let c
+        val prefix = GoalText.normalize(c.removeSuffix("…"))
+        chosenFull ?: (heard + names + AppProfiles.recall(app.packageName, "places")).firstOrNull {
+            GoalText.normalize(it).let { n -> n.startsWith(prefix) && n.length > prefix.length }
+        }
     }
 
     /**
@@ -91,8 +100,9 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
 
     /** Full place names this run saw or used, for the recognizer's vocabulary (cut carousel labels are not names). */
     fun knownPlaceNames(): List<String> =
-        (seenPlaces.filterNot { it.endsWith("…") } + listOfNotNull(chosenFull, chosenSpoken) + answered +
-            (if (evidence.complete) listOfNotNull(names.firstOrNull()) else emptyList())).distinct()
+        (seenPlaces.filterNot { it.endsWith("…") } + listOfNotNull(chosenFull, chosenName) + answered +
+            // The name as said, once it led to the place itself (guidance, or the route preview of a travel-time question).
+            (if (evidence.complete || (destinationBound && chosen == null)) listOfNotNull(names.firstOrNull()) else emptyList())).distinct()
 
     val appPackage: String get() = app.packageName
 
@@ -254,6 +264,15 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
                     !Regex("^(?:더보기|전체\\s*보기|등록|편집|추가|more|edit|add)$", RegexOption.IGNORE_CASE).matches(e.label.trim())
                 }.forEach { seenPlaces += it.label.trim() }
                 if (carouselSignature == view.signature) carouselEnd = true // the last scroll moved nothing
+                // Both ends seen: the whole list, for the next command to skip paging through it.
+                if (carouselEnd && collectedBack && !choiceAsked) AppProfiles.learn(app.packageName, "frequents", seenPlaces.joinToString("|"))
+                // The list as seen last time holds nothing named or sounding like this: look the name up
+                // right away instead of paging both ways again (3-4 s). A place added since is found by the search.
+                val known = AppProfiles.recall(app.packageName, "frequents")
+                if (carouselScrolls == 0 && !carouselEnd && chosen == null && !choiceAsked && known.isNotEmpty() &&
+                    (known + seenPlaces).none { matches(it) || soundsNear(it) }) {
+                    carouselEnd = true; collectedBack = true; choiceAsked = true
+                }
                 // The list may have been left scrolled to its end: before asking, walk back to its start too,
                 // so the model sees every place (집 and 회사 were missing once).
                 if (carouselEnd && chosen == null && !choiceAsked && !collectedBack) {

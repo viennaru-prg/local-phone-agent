@@ -167,6 +167,8 @@ class AndroidPhone(private val context: Context) : Phone {
         return s.observationDiagnostic?.startsWith("NO_ROOT") != true
     }
 
+    fun home(): Boolean = service?.home() == true
+
     override fun musicActive(): Boolean? = runCatching { context.getSystemService(AudioManager::class.java).isMusicActive }.getOrNull()
 
     override fun now(): Long = SystemClock.elapsedRealtime()

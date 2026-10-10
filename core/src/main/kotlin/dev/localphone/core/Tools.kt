@@ -50,6 +50,8 @@ interface Tools {
     suspend fun openDirect(goal: String): String? = null
     /** Time, battery, volume, timer, alarm: answered or done by Android directly; null = not handled. */
     suspend fun quick(request: QuickRequest): String? = null
+    /** Closes the named app, or the one in front for null. Never this assistant itself. */
+    suspend fun closeApp(name: String?, guidanceChecked: Boolean = false): CloseResult = CloseResult.NotAnApp
 }
 
 object Router {
@@ -179,6 +181,27 @@ class Assistant(
             tools.quick(request)?.let { say ->
                 listener.step(StepRecord(0, "android_api", "", "", request.toString(), "완료", "Android 기능으로 바로 처리", 0, 0))
                 return AgentResult(Outcome.DONE, say, emptyList())
+            }
+        }
+        AppClose.target(goal)?.let { name ->
+            val named = name.ifEmpty { null }
+            when (val closed = tools.closeApp(named)) {
+                is CloseResult.Closed -> {
+                    listener.step(StepRecord(0, "android_api", "", "", "close_app", "완료", "앱 닫기", 0, 0))
+                    return AgentResult(Outcome.DONE, closed.say, emptyList())
+                }
+                // The map: end a running drive first. "종료해줘" during guidance means the drive; with none
+                // running (or "네이버 지도 종료해줘"), the map itself closes.
+                CloseResult.NavigationApp -> {
+                    val ended = agent.run("내비게이션 꺼줘")
+                    if (ended.outcome != Outcome.DONE) return ended
+                    val wasGuiding = Harness.endedGuidance(ended.history)
+                    if (wasGuiding && named == null) return ended
+                    val after = tools.closeApp(named, guidanceChecked = true)
+                    return if (after is CloseResult.Closed) AgentResult(Outcome.DONE, (if (wasGuiding) "길안내를 끝내고 " else "") + after.say, ended.history)
+                        else ended
+                }
+                CloseResult.NotAnApp -> Unit
             }
         }
         // A name with no request ("이름 모임") would only send the screen agent wandering the app in front.

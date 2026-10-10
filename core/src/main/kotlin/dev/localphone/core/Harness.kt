@@ -231,6 +231,12 @@ object Harness {
             view.elements.none { app.activeGuidanceRegex().containsMatchIn(it.label) }
     }
 
+    /** The run pressed the navigation app's end control: guidance was on and was ended. */
+    fun endedGuidance(history: List<HistoryLine>): Boolean = history.any { h ->
+        h.action.startsWith("click") && h.outcome.contains("바뀜") &&
+            navigationApp().endGuidanceRegex().matches(Regex("\"(.*)\"").find(h.action)?.groupValues?.get(1)?.trim().orEmpty())
+    }
+
     /** Ends guidance: open the navigation app if needed, press its end control (behind a menu if hidden), confirm. */
     private fun endGuidance(goal: String, view: ScreenView, history: List<HistoryLine>): Auto? {
         if (!isEndGuidance(goal)) return null

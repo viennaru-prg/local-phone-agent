@@ -9,7 +9,8 @@ package dev.localphone.core
  */
 object Intents {
     const val SYSTEM = "사용자의 음성 명령이 무엇을 요청하는지 하나만 고른다. target과 app은 명령에 나온 말을 그대로 쓴다.\n" +
-        "intent: navigate(목적지로 길안내), eta(목적지까지 걸리는 시간), end_navigation(길안내 종료), " +
+        "intent: navigate(목적지로 길안내), eta(목적지까지 걸리는 시간), end_navigation(길안내 종료: 안내·길·내비를 말할 때만), " +
+        "close_app(앱 끄기·종료·닫기: app에 앱 이름, 말하지 않았으면 빈칸), " +
         "play_song(특정 노래 재생), media(play/pause/next/previous: 음악 재생·멈춤·다음 곡·이전 곡), now_playing(지금 나오는 노래), " +
         "playlist_add(재생목록에 노래 추가), playlist_remove(재생목록에서 노래 빼기), open_app(앱 열기), " +
         "open_screen(앱 안의 화면·메뉴 열기), search(앱에서 검색), none(그 밖의 일)\n" +
@@ -17,6 +18,7 @@ object Intents {
         "수요모임 가는 길 좀 알려줄래 → {\"intent\":\"navigate\",\"target\":\"수요모임\",\"app\":\"\"}\n" +
         "회사 가려면 몇 분이나 걸려 → {\"intent\":\"eta\",\"target\":\"회사\",\"app\":\"\"}\n" +
         "길 안내 이제 그만해 → {\"intent\":\"end_navigation\",\"target\":\"\",\"app\":\"\"}\n" +
+        "네이버 지도 이제 닫아줄래 → {\"intent\":\"close_app\",\"target\":\"\",\"app\":\"네이버 지도\"}\n" +
         "더 크로스 노래 듣고 싶어 → {\"intent\":\"play_song\",\"target\":\"더 크로스\",\"app\":\"\"}\n" +
         "노래 잠깐 멈춰봐 → {\"intent\":\"media\",\"target\":\"pause\",\"app\":\"\"}\n" +
         "이거 무슨 노래야 → {\"intent\":\"now_playing\",\"target\":\"\",\"app\":\"\"}\n" +
@@ -25,7 +27,7 @@ object Intents {
         "네이버 지도에서 카페 좀 찾아봐 → {\"intent\":\"search\",\"target\":\"카페\",\"app\":\"네이버 지도\"}\n" +
         "카카오톡에서 엄마한테 온 메시지 읽어줘 → {\"intent\":\"none\",\"target\":\"\",\"app\":\"\"}"
 
-    private val names = listOf("navigate", "eta", "end_navigation", "play_song", "media", "now_playing",
+    private val names = listOf("navigate", "eta", "end_navigation", "close_app", "play_song", "media", "now_playing",
         "playlist_add", "playlist_remove", "open_app", "open_screen", "search", "none")
 
     val GRAMMAR = "root ::= \"{\\\"intent\\\":\\\"\" intent \"\\\",\\\"target\\\":\\\"\" text \"\\\",\\\"app\\\":\\\"\" text \"\\\"}\"\n" +
@@ -56,6 +58,7 @@ object Intents {
             "navigate" -> target.takeIf(::spoken)?.let { "${withRo(it)} 안내해줘" }
             "eta" -> target.takeIf(::spoken)?.let { "${it}까지 얼마나 걸려" }
             "end_navigation" -> "내비게이션 꺼줘"
+            "close_app" -> app.takeIf(::spoken)?.let { "$it 종료해줘" } ?: "종료해줘"
             "play_song" -> target.takeIf(::spoken)?.let { "$it 틀어줘" }
             "media" -> when (target.lowercase()) {
                 "play" -> "음악 틀어줘"; "pause" -> "음악 멈춰줘"; "next" -> "다음 곡 틀어줘"; "previous" -> "이전 곡 틀어줘"; else -> null

@@ -179,6 +179,33 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
         }
     }.onFailure { Log.w(TAG, "quick $request failed", it) }.getOrNull()
 
+    /**
+     * "종료해줘" / "네이버 지도 종료해줘": leave the app for the home screen. (Android 14+ lets an app end
+     * only its own processes, so the closed app's process is left to the system.) The map while guiding is reported instead (the drive ends first), and
+     * this assistant never closes itself.
+     */
+    override suspend fun closeApp(name: String?, guidanceChecked: Boolean): CloseResult {
+        val front = phone.observe()?.let(ScreenCompactor::compact)
+        val frontPkg = front?.snapshot?.takeIf { !it.home }?.packageName
+        val found = name?.let { (AppIndex(context).find(it, allowFuzzy = false) as? AppIndex.Match.Found)?.app }
+        // Secure Folder apps are not in this profile's launcher: the app in front answering to the name.
+        val frontNamed = name != null && front != null && GoalText.normalize(front.snapshot.appLabel).let { label ->
+            label.isNotEmpty() && (label.contains(GoalText.normalize(name)) || GoalText.soundsLike(name, front.snapshot.appLabel))
+        }
+        val pkg = found?.packageName ?: frontPkg?.takeIf { name == null || frontNamed }
+            ?: return if (name == null) CloseResult.Closed("닫을 앱이 화면에 없어요.") else CloseResult.NotAnApp
+        if (pkg == context.packageName) return CloseResult.Closed("음성 비서는 닫지 않아요.")
+        if (pkg == Harness.navigationApp().packageName && !guidanceChecked) return CloseResult.NavigationApp
+        val label = found?.label ?: front?.snapshot?.appLabel?.takeIf { frontPkg == pkg } ?: name ?: "앱"
+        val c = label.last()
+        val batchim = c in '가'..'힣' && (c - '가') % 28 != 0
+        if (frontPkg != pkg) return CloseResult.Closed("$label${if (batchim) "은" else "는"} 지금 화면에 없어요.")
+        phone.home()
+        withTimeoutOrNull(2500) { while (phone.observe()?.packageName == pkg) delay(100) }
+        Log.i(TAG, "close $pkg")
+        return CloseResult.Closed("$label${if (batchim) "을" else "를"} 닫았어요.")
+    }
+
     private fun endsWithBatchim(word: String): Boolean {
         val c = word.lastOrNull() ?: return false
         if (c !in '가'..'힣') return false

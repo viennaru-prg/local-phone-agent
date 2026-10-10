@@ -149,10 +149,12 @@ class Speaker(context: Context) {
         waiting[id] = done
         try {
             if (tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, id) == TextToSpeech.ERROR) return@withLock
-            if (withTimeoutOrNull(5000) { done.await(); true } != true) {
-                Log.w("AgentVoice", "TTS callback timeout; releasing completed task")
-                tts.stop()
-            }
+            // Wait about as long as the sentence takes to say (Korean TTS: ~6 syllables a second). A fixed
+            // 5 s stopped longer answers mid-sentence ("켜진 알람은 5개예요. 평일 오전 6시 30분, …"). If the
+            // done callback never comes, stop waiting but let the voice finish: never cut it off.
+            val expected = 3_000L + text.length * 200L
+            if (withTimeoutOrNull(expected.coerceAtMost(90_000L)) { done.await(); true } != true)
+                Log.w("AgentVoice", "TTS done callback not received in ${expected}ms; leaving it to finish")
         } catch (e: CancellationException) { tts.stop(); throw e }
         finally { waiting.remove(id) }
     }

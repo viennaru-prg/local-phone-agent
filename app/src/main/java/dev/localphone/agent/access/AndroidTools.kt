@@ -198,6 +198,11 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
      * alarm list, read from its switches ("오전 06:30, 공휴일에는 끄기, 월요일, …").
      */
     override suspend fun alarm(request: AlarmRequest): String? {
+        // A ringing alarm shows only as a passing popup while the phone is in use: it is found by its sound
+        // and answered through the clock app's own dismiss / snooze actions.
+        val ringing = alarmRinging()
+        if (request is AlarmRequest.Snooze) return if (ringing) ringingAction(snooze = true, request.minutes) else "지금 울리는 알람이 없어요."
+        if (ringing && request is AlarmRequest.Switch && !request.on && request.target == AlarmTarget.Next) return ringingAction(snooze = false, null)
         val nextAt = context.getSystemService(android.app.AlarmManager::class.java).nextAlarmClock?.triggerTime
         if (request == AlarmRequest.Next) return AlarmCommands.next(System.currentTimeMillis(), nextAt)
         var view = openAlarmList() ?: return null
@@ -229,17 +234,30 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
             is AlarmRequest.Switch -> request.target; is AlarmRequest.Sound -> request.target; is AlarmRequest.Delete -> request.target
             else -> return null
         }
+        // "내일 알람": which one rings first tomorrow is known only from the whole list.
+        var ringAt = nextAt
+        val tomorrow = if (target == AlarmTarget.Tomorrow) {
+            walk()
+            val first = AlarmCommands.tomorrow(rows.values.toList(), System.currentTimeMillis()) ?: return "내일 울릴 알람이 없어요."
+            if (first.ringsToday && request is AlarmRequest.Switch && !request.on)
+                return "${AlarmCommands.describe(first.row)} 알람은 오늘도 울려요. 지금 끄면 오늘 것도 울리지 않으니, 오늘 알람이 지난 뒤에 다시 말씀해 주세요."
+            ringAt = first.at
+            view = openAlarmList() ?: return null
+            first.row
+        } else null
         val wanted: (AlarmRow) -> Boolean = when (target) {
             AlarmTarget.Next -> { row -> nextAt != null && AlarmCommands.rowAt(listOf(row), nextAt) != null }
+            AlarmTarget.Tomorrow -> { row -> row.label == tomorrow!!.label && row.hour == tomorrow.hour && row.minute == tomorrow.minute && row.days == tomorrow.days }
             is AlarmTarget.At -> { row -> AlarmCommands.rowsAt(listOf(row), target.hour, target.minute).isNotEmpty() }
         }
         val row = walk(wanted) ?: return when (target) {
             AlarmTarget.Next -> if (nextAt == null) "예정된 알람이 없어요." else null
+            AlarmTarget.Tomorrow -> null
             is AlarmTarget.At -> "${AlarmCommands.clock(target.hour, target.minute)} 알람을 찾지 못했어요."
         }
         val name = AlarmCommands.describe(row)
         return when (request) {
-            is AlarmRequest.Switch -> switchAlarm(view, row, request, name, nextAt)
+            is AlarmRequest.Switch -> switchAlarm(view, row, request, name, ringAt)
             is AlarmRequest.Sound -> alarmSound(view, row, request.name, name)
             is AlarmRequest.Delete -> {
                 // Two alarms at that time ("평일 7시" and "토요일 7시"): ask, never pick one to delete.
@@ -294,6 +312,24 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
         } == true
         if (gone) AlarmSkips.forget(context, row.hour, row.minute, row.days, row.label)
         return if (gone) "$name 알람을 지웠어요." else null
+    }
+
+    private fun alarmRinging(): Boolean = runCatching {
+        context.getSystemService(android.media.AudioManager::class.java).activePlaybackConfigurations
+            .any { it.audioAttributes.usage == android.media.AudioAttributes.USAGE_ALARM }
+    }.getOrDefault(false)
+
+    private suspend fun ringingAction(snooze: Boolean, minutes: Int?): String? {
+        val intent = Intent(if (snooze) android.provider.AlarmClock.ACTION_SNOOZE_ALARM else android.provider.AlarmClock.ACTION_DISMISS_ALARM)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (!snooze) intent.putExtra(android.provider.AlarmClock.EXTRA_ALARM_SEARCH_MODE, android.provider.AlarmClock.ALARM_SEARCH_MODE_NEXT)
+        minutes?.let { intent.putExtra(android.provider.AlarmClock.EXTRA_ALARM_SNOOZE_DURATION, it) }
+        runCatching { (AgentAccessibilityService.instance ?: context).startActivity(intent) }.onFailure { return null }
+        // The sound stopping is the proof.
+        val stopped = withTimeoutOrNull(4000) { while (alarmRinging()) delay(200); true } == true
+        Log.i(TAG, "ringing alarm ${if (snooze) "snooze" else "dismiss"} stopped=$stopped")
+        if (!stopped) return null
+        return if (snooze) "${minutes?.let { "${it}분 " }.orEmpty()}뒤에 다시 울려요." else "울리던 알람을 껐어요."
     }
 
     private suspend fun openAlarmList(): ScreenView? {

@@ -5,6 +5,8 @@ import java.util.Calendar
 /** Which alarm a command means: the one that rings next, or the one at a time ("7시 알람"). */
 sealed interface AlarmTarget {
     data object Next : AlarmTarget
+    /** "내일 알람": the first alarm that rings tomorrow. */
+    data object Tomorrow : AlarmTarget
     data class At(val hour: Int, val minute: Int) : AlarmTarget
 }
 
@@ -17,6 +19,8 @@ sealed interface AlarmRequest {
     data object List : AlarmRequest
     /** [once]: skip only the coming ring of a repeating alarm; it is switched back on right after. */
     data class Switch(val target: AlarmTarget, val on: Boolean, val once: Boolean) : AlarmRequest
+    /** The alarm ringing now: "다시 울려줘", "5분만 더" (null minutes: the clock app's own snooze length). */
+    data class Snooze(val minutes: Int?) : AlarmRequest
     /** Deletes one alarm; several at that time are asked about, never guessed. */
     data class Delete(val target: AlarmTarget) : AlarmRequest
     /** [name]: the sound to pick ("Over the Horizon으로"), null to open the choice for the user. */
@@ -29,8 +33,13 @@ data class AlarmRow(val id: Int, val label: String?, val hour: Int, val minute: 
 
 object AlarmCommands {
     fun parse(goal: String): AlarmRequest? {
-        if (!Regex("알람|알림\\s*소리").containsMatchIn(goal) || GoalScope.multiple(goal)) return null
-        val target = time(goal)?.let { (h, m) -> AlarmTarget.At(h, m) } ?: AlarmTarget.Next
+        if (GoalScope.multiple(goal)) return null
+        // While it rings: "다시 울려줘", "스누즈", "5분만 더 잘래".
+        if (Regex("다시\\s*울려|스누즈|snooze|(?:분|조금)만\\s*더\\s*(?:잘|자)", RegexOption.IGNORE_CASE).containsMatchIn(goal))
+            return AlarmRequest.Snooze(Regex("(\\d+|[가-힣]+?)\\s*분").find(goal)?.groupValues?.get(1)?.let(QuickCommands::number))
+        if (!Regex("알람|알림\\s*소리").containsMatchIn(goal)) return null
+        val target = time(goal)?.let { (h, m) -> AlarmTarget.At(h, m) }
+            ?: if (Regex("내일").containsMatchIn(goal)) AlarmTarget.Tomorrow else AlarmTarget.Next
         if (Regex("소리|음악|노래|벨소리|알람음|음원").containsMatchIn(goal) && Regex("바꿔|변경|교체|바꾸|설정").containsMatchIn(goal))
             return AlarmRequest.Sound(target, soundName(goal))
         if (Regex("지워|삭제|없애").containsMatchIn(goal)) return AlarmRequest.Delete(target)
@@ -39,7 +48,7 @@ object AlarmCommands {
         if (off || on) {
             // "다음 알람 꺼줘" means the coming ring; "7시 알람 꺼줘" switches that alarm off for good unless
             // the command says once ("이번만", "내일만", "한 번만").
-            val once = off && (target == AlarmTarget.Next || Regex("이번|한\\s*번|내일만|오늘만|하루만|건너뛰|스킵").containsMatchIn(goal))
+            val once = off && (target == AlarmTarget.Next || target == AlarmTarget.Tomorrow || Regex("이번|한\\s*번|내일만|오늘만|하루만|건너뛰|스킵").containsMatchIn(goal))
             return AlarmRequest.Switch(target, on, once)
         }
         if (Regex("다음\\s*알람|알람.{0,6}(?:언제|몇\\s*시)").containsMatchIn(goal) && !Regex("일정|목록|전부|모두|다\\s*(?:알려|보여)").containsMatchIn(goal))
@@ -114,7 +123,17 @@ object AlarmCommands {
         val off = rows.size - on.size
         val offText = if (off > 0) " 꺼진 알람이 ${off}개 더 있어요." else ""
         if (on.isEmpty()) return "켜진 알람이 없어요.$offText"
-        return "켜진 알람은 ${on.size}개예요. ${on.joinToString(", ") { describe(it) }}.$offText"
+        // Grouped by when they repeat, the morning/afternoon said once per run: "평일 오전 6시 30분·6시 55분".
+        val groups = on.groupBy { listOfNotNull(it.label?.let { l -> "'$l'" }, it.date ?: dayWords(it.days)).joinToString(" ") }
+        val said = groups.entries.joinToString(", ") { (days, rows) ->
+            var half = ""
+            val times = rows.sortedBy { it.hour * 60 + it.minute }.joinToString("·") { r ->
+                val c = clock(r.hour, r.minute)
+                if (c.startsWith(half) && half.isNotEmpty()) c.removePrefix(half).trim() else { half = c.substringBefore(" "); c }
+            }
+            listOf(days, times).filter { it.isNotEmpty() }.joinToString(" ")
+        }
+        return "켜진 알람은 ${on.size}개예요. $said.$offText"
     }
 
     /** The next ring: "내일 오전 7시 50분이에요. 11시간 33분 남았어요." */
@@ -137,6 +156,37 @@ object AlarmCommands {
         val at = Calendar.getInstance().apply { timeInMillis = atMillis }
         val same = rows.filter { it.on && it.hour == at.get(Calendar.HOUR_OF_DAY) && it.minute == at.get(Calendar.MINUTE) }
         return same.firstOrNull { at.get(Calendar.DAY_OF_WEEK) in it.days } ?: same.firstOrNull { it.days.isEmpty() } ?: same.firstOrNull()
+    }
+
+    /** When [row] rings next after [nowMillis] (null for a dated one-time alarm, whose date the list only shows). */
+    fun nextRing(row: AlarmRow, nowMillis: Long): Long? {
+        if (row.date != null) return null
+        val c = Calendar.getInstance().apply {
+            timeInMillis = nowMillis; set(Calendar.HOUR_OF_DAY, row.hour); set(Calendar.MINUTE, row.minute)
+            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        }
+        repeat(8) {
+            if (c.timeInMillis > nowMillis && (row.days.isEmpty() || c.get(Calendar.DAY_OF_WEEK) in row.days)) return c.timeInMillis
+            c.add(Calendar.DAY_OF_MONTH, 1)
+        }
+        return null
+    }
+
+    /** The first alarm that rings tomorrow, with its ring; [ringsToday] if it also rings later today. */
+    data class TomorrowRing(val row: AlarmRow, val at: Long, val ringsToday: Boolean)
+
+    fun tomorrow(rows: List<AlarmRow>, nowMillis: Long): TomorrowRing? {
+        val now = Calendar.getInstance().apply { timeInMillis = nowMillis }
+        val start = (now.clone() as Calendar).apply { add(Calendar.DAY_OF_MONTH, 1); set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis
+        val end = start + 86_400_000L
+        return rows.filter { it.on }.mapNotNull { row ->
+            // Its first ring at or after tomorrow's start.
+            val at = nextRing(row, start - 1) ?: return@mapNotNull null
+            if (at >= end) return@mapNotNull null
+            val today = nextRing(row, nowMillis)?.let { it < start } == true
+            TomorrowRing(row, at, today)
+        }.minByOrNull { it.at }
     }
 
     fun rowsAt(rows: List<AlarmRow>, hour: Int, minute: Int): List<AlarmRow> = rows.filter { it.hour == hour && it.minute == minute }

@@ -29,6 +29,8 @@ class AlarmCommandsTest {
         assertEquals(AlarmRequest.Sound(AlarmTarget.At(6, 30), "Over the Horizon"), AlarmCommands.parse("6시 반 알람 소리 Over the Horizon으로 바꿔줘"))
         assertEquals(AlarmRequest.Delete(AlarmTarget.At(4, 44)), AlarmCommands.parse("4시 44분 알람 지워줘"))
         assertEquals(AlarmRequest.Delete(AlarmTarget.At(5, 5)), AlarmCommands.parse("새벽 5시 5분 알람 삭제해줘"))
+        assertEquals(AlarmRequest.Snooze(null), AlarmCommands.parse("다시 울려줘"))
+        assertEquals(AlarmRequest.Snooze(5), AlarmCommands.parse("5분만 더 잘래"))
         // Setting one is the quick command's; other words are not alarms.
         assertNull(AlarmCommands.parse("7시 알람 설정해줘"))
         assertNull(AlarmCommands.parse("음악 꺼줘"))
@@ -51,11 +53,31 @@ class AlarmCommandsTest {
         assertEquals((2..6).toList(), rows[1].days)
         assertEquals("켜진 알람은 3개예요. 평일 오전 6시 30분, 토요일 오전 7시 30분, 일요일 오후 2시 20분. 꺼진 알람이 1개 더 있어요.",
             AlarmCommands.summary(rows))
+        val week = AlarmCommands.rows(list("오전 06:30, 공휴일에는 끄기, 월요일, 화요일, 수요일, 목요일, 금요일" to true,
+            "오전 06:55, 공휴일에는 끄기, 월요일, 화요일, 수요일, 목요일, 금요일" to true, "오전 07:30, 토요일" to true,
+            "오전 07:50, 일요일" to true, "오후 02:20, 일요일" to true))
+        assertEquals("켜진 알람은 5개예요. 평일 오전 6시 30분·6시 55분, 토요일 오전 7시 30분, 일요일 오전 7시 50분·오후 2시 20분.",
+            AlarmCommands.summary(week))
         val once = AlarmCommands.rows(list("오후 08:52, 10월 10일 토요일" to true)).single()
         assertEquals(emptyList(), once.days)
         assertEquals("10월 10일 토요일 오후 8시 52분", AlarmCommands.describe(once))
         val sunday = Calendar.getInstance().apply { set(2026, Calendar.OCTOBER, 11, 14, 20, 0) }.timeInMillis
         assertEquals(14 to 20, AlarmCommands.rowAt(rows, sunday)?.let { it.hour to it.minute })
+    }
+
+    @Test fun tomorrowsFirstAlarm() {
+        assertEquals(AlarmRequest.Switch(AlarmTarget.Tomorrow, on = false, once = true), AlarmCommands.parse("내일 알람 꺼줘"))
+        val saturdayEvening = Calendar.getInstance().apply { set(2026, Calendar.OCTOBER, 10, 20, 40, 0) }.timeInMillis
+        val rows = AlarmCommands.rows(list("오전 06:30, 월요일, 화요일, 수요일, 목요일, 금요일" to true, "오전 07:30, 토요일" to true,
+            "오전 07:50, 일요일" to true, "오후 02:20, 일요일" to true))
+        val first = AlarmCommands.tomorrow(rows, saturdayEvening)!!
+        assertEquals(7 to 50, first.row.hour to first.row.minute)
+        assertEquals(false, first.ringsToday)
+        // A daily alarm later tonight would be skipped today too if switched off now.
+        val tonight = AlarmCommands.rows(list("오전 05:00, 매일" to true, "오후 11:00, 매일" to true))
+        assertEquals(5 to 0, AlarmCommands.tomorrow(tonight, saturdayEvening)!!.row.let { it.hour to it.minute })
+        val lateOnly = AlarmCommands.rows(list("오후 11:00, 매일" to true))
+        assertEquals(true, AlarmCommands.tomorrow(lateOnly, saturdayEvening)!!.ringsToday)
     }
 
     @Test fun theNextRingIsSaidWithItsDay() {

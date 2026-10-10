@@ -189,7 +189,7 @@ class Assistant(
             listener.progress(when (request) {
                 AlarmRequest.Next -> "다음 알람 확인 중…"; AlarmRequest.List -> "알람 목록 확인 중…"
                 is AlarmRequest.Switch -> "알람 ${if (request.on) "켜는" else "끄는"} 중…"; is AlarmRequest.Sound -> "알람음 화면 여는 중…"
-                is AlarmRequest.Delete -> "알람 지우는 중…"
+                is AlarmRequest.Delete -> "알람 지우는 중…"; is AlarmRequest.Snooze -> "알람 미루는 중…"
             })
             val say = tools.alarm(request)
             listener.step(StepRecord(0, "android_api", "", "", request.toString(), if (say != null) "완료" else "실패", "시계 앱 알람", 0, 0))

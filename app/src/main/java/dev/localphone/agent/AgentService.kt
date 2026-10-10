@@ -139,7 +139,7 @@ class AgentService : Service() {
             val listener = object : AgentListener {
                 override fun progress(text: String) { if (id == runId) showTask(text) }
                 override fun needUser(text: String) {
-                    if (id == runId) { showTask(text, important = true); scope.launch { speaker.say(text) } }
+                    if (id == runId) { showTask(text, important = true); if (app.prefs.speak) scope.launch { speaker.say(text) } }
                 }
                 override fun step(record: StepRecord) {
                     trace.step(record, if (record.modelMs > 0) app.llm.lastStats else null)

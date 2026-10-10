@@ -12,7 +12,7 @@ object ModelUse {
     }
 
     private fun likelyOne(goal: String): Boolean = !(
-        QuickCommands.parse(goal) != null || AppClose.target(goal) != null || QuickCommands.etaTarget(goal) != null || QuickCommands.asksNowPlaying(goal) ||
+        QuickCommands.parse(goal) != null || AlarmCommands.parse(goal) != null || AppClose.target(goal) != null || QuickCommands.etaTarget(goal) != null || QuickCommands.asksNowPlaying(goal) ||
             Router.mediaKeyIn(goal) != null || Router.isNavigationGoal(goal) || Harness.isEndGuidance(goal) ||
             (GoalText.playSong(goal) != null && GoalText.namedApp(goal).let { it == null || it in musicApps() }) || GoalText.playlistAdd(goal) != null || GoalText.playlistRemove(goal) != null ||
             DirectGoals.settingsScreen(goal) != null || DirectGoals.appName(goal) != null ||

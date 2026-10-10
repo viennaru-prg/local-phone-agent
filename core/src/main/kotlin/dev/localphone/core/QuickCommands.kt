@@ -12,7 +12,10 @@ sealed interface QuickRequest {
     /** [steps] > 0 raises, < 0 lowers; [toMax]/[mute] for "최대로", "소리 꺼". */
     data class Volume(val steps: Int, val toMax: Boolean = false, val mute: Boolean = false) : QuickRequest
     data class Timer(val seconds: Int) : QuickRequest
-    data class Alarm(val hour: Int, val minute: Int) : QuickRequest
+    /** [days]: Calendar.SUNDAY..SATURDAY (1..7) for a weekly alarm, empty for once. */
+    data class Alarm(val hour: Int, val minute: Int, val days: List<Int> = emptyList(), val label: String? = null) : QuickRequest
+    /** "30분 뒤에 알람": rings once, [minutes] from now. */
+    data class AlarmIn(val minutes: Int) : QuickRequest
 }
 
 object QuickCommands {
@@ -43,7 +46,7 @@ object QuickCommands {
     private val koreanNumber = mapOf("한" to 1, "두" to 2, "세" to 3, "네" to 4, "다섯" to 5, "여섯" to 6, "일곱" to 7, "여덟" to 8,
         "아홉" to 9, "열" to 10, "열한" to 11, "열두" to 12, "십" to 10, "이십" to 20, "삼십" to 30, "사십" to 40, "오십" to 50)
 
-    private fun number(word: String): Int? = word.toIntOrNull() ?: koreanNumber[word]
+    internal fun number(word: String): Int? = word.toIntOrNull() ?: koreanNumber[word]
 
     private fun timer(goal: String): QuickRequest? {
         if (!Regex("타이머|뒤에\\s*알려|후에\\s*알려").containsMatchIn(goal) || Regex("꺼|취소|멈춰|정지|삭제").containsMatchIn(goal)) return null
@@ -56,8 +59,15 @@ object QuickCommands {
     }
 
     private fun alarm(goal: String): QuickRequest? {
-        if (!Regex("알람|깨워").containsMatchIn(goal) || !Regex("맞춰|설정|해\\s*줘|깨워|추가").containsMatchIn(goal) ||
-            Regex("꺼|취소|삭제|지워|화면|목록|보여").containsMatchIn(goal)) return null
+        if (!Regex("알람|깨워").containsMatchIn(goal) || !Regex("맞춰|설정|해\\s*줘|깨워|추가|넣어|만들어|울려").containsMatchIn(goal) ||
+            Regex("꺼|끄|취소|삭제|지워|화면|목록|보여|바꿔|변경|교체|일정|언제|켜").containsMatchIn(goal)) return null
+        // "30분 뒤에 알람", "1시간 후에 깨워줘": once, counted from now.
+        if (Regex("(?:시간|분)\\s*(?:반\\s*)?(?:뒤|후|있다가)").containsMatchIn(goal)) {
+            val minutes = Regex("(\\d+|[가-힣]+?)\\s*(시간|분)").findAll(goal).sumOf { m ->
+                (number(m.groupValues[1]) ?: 0) * if (m.groupValues[2] == "시간") 60 else 1
+            } + if (Regex("시간\\s*반").containsMatchIn(goal)) 30 else 0
+            return minutes.takeIf { it in 1..1439 }?.let { QuickRequest.AlarmIn(it) }
+        }
         val m = Regex("(\\d{1,2}|[가-힣]+?)\\s*시(?:\\s*(\\d{1,2}|반)\\s*분?)?").find(goal) ?: return null
         var hour = number(m.groupValues[1]) ?: return null
         val minute = when (val mm = m.groupValues[2]) { "" -> 0; "반" -> 30; else -> mm.toIntOrNull() ?: 0 }
@@ -65,7 +75,9 @@ object QuickCommands {
         val am = Regex("오전|아침|새벽").containsMatchIn(goal)
         if (pm && hour in 1..11) hour += 12
         if (am && hour == 12) hour = 0
-        return if (hour in 0..23 && minute in 0..59) QuickRequest.Alarm(hour, minute) else null
+        // "'운동'이라고 알람": the alarm's name.
+        val label = Regex("[\"'“‘]([^\"'”’]{1,20})[\"'”’]").find(goal)?.groupValues?.get(1)?.trim()
+        return if (hour in 0..23 && minute in 0..59) QuickRequest.Alarm(hour, minute, AlarmCommands.days(goal), label) else null
     }
 
     /** "회사까지 얼마나 걸려?" → "회사": a travel-time question about a place (answered from the route preview). */

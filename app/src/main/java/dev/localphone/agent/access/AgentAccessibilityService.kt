@@ -51,10 +51,22 @@ class AgentAccessibilityService : AccessibilityService() {
     private val windowOf = java.util.Collections.synchronizedMap(object : java.util.IdentityHashMap<Snapshot, Int>() {})
     private val recent = ArrayDeque<Snapshot>()
 
-    override fun onServiceConnected() { instance = this; Log.i(TAG, "connected") }
+    // Unlocking is when a skipped alarm that could not be switched back on while locked gets another try.
+    private val unlocked = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: android.content.Intent) = AlarmSkips.catchUp(context)
+    }
+
+    override fun onServiceConnected() {
+        instance = this; Log.i(TAG, "connected")
+        registerReceiver(unlocked, android.content.IntentFilter(android.content.Intent.ACTION_USER_PRESENT))
+        AlarmSkips.catchUp(this)
+    }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
-    override fun onDestroy() { hideOverlay(); if (instance === this) instance = null; super.onDestroy() }
+    override fun onDestroy() {
+        runCatching { unregisterReceiver(unlocked) }
+        hideOverlay(); if (instance === this) instance = null; super.onDestroy()
+    }
 
     // ---------- observation ----------
 

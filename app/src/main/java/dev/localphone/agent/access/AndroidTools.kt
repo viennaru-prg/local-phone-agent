@@ -168,16 +168,167 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
                     .joinToString(" ") + " 타이머를 시작했어요."
             }
             is QuickRequest.Alarm -> {
-                context.startActivity(Intent(android.provider.AlarmClock.ACTION_SET_ALARM)
-                    .putExtra(android.provider.AlarmClock.EXTRA_HOUR, request.hour)
-                    .putExtra(android.provider.AlarmClock.EXTRA_MINUTES, request.minute)
-                    .putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, true)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                val h = request.hour % 12
-                "${if (request.hour < 12) "오전" else "오후"} ${if (h == 0) 12 else h}시${if (request.minute > 0) " ${request.minute}분" else ""} 알람을 맞췄어요."
+                setAlarm(request.hour, request.minute, request.days, request.label)
+                val days = AlarmCommands.dayWords(request.days)?.let { if (it == "매일" || it == "평일" || it == "주말") "$it " else "매주 $it " }.orEmpty()
+                "$days${AlarmCommands.clock(request.hour, request.minute)}${request.label?.let { " '$it'" }.orEmpty()} 알람을 맞췄어요."
+            }
+            is QuickRequest.AlarmIn -> {
+                val at = java.util.Calendar.getInstance().apply { add(java.util.Calendar.MINUTE, request.minutes) }
+                val hour = at.get(java.util.Calendar.HOUR_OF_DAY); val minute = at.get(java.util.Calendar.MINUTE)
+                setAlarm(hour, minute, emptyList(), null)
+                val wait = listOfNotNull((request.minutes / 60).takeIf { it > 0 }?.let { "${it}시간" }, (request.minutes % 60).takeIf { it > 0 }?.let { "${it}분" }).joinToString(" ")
+                "$wait 뒤인 ${AlarmCommands.clock(hour, minute)}에 알람을 맞췄어요."
             }
         }
     }.onFailure { Log.w(TAG, "quick $request failed", it) }.getOrNull()
+
+    private fun setAlarm(hour: Int, minute: Int, days: List<Int>, label: String?) {
+        val intent = Intent(android.provider.AlarmClock.ACTION_SET_ALARM)
+            .putExtra(android.provider.AlarmClock.EXTRA_HOUR, hour)
+            .putExtra(android.provider.AlarmClock.EXTRA_MINUTES, minute)
+            .putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, true)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (days.isNotEmpty()) intent.putExtra(android.provider.AlarmClock.EXTRA_DAYS, ArrayList(days))
+        label?.let { intent.putExtra(android.provider.AlarmClock.EXTRA_MESSAGE, it) }
+        context.startActivity(intent)
+    }
+
+    /**
+     * The next ring comes from the system; the list, switching and the sound are done in the clock app's
+     * alarm list, read from its switches ("오전 06:30, 공휴일에는 끄기, 월요일, …").
+     */
+    override suspend fun alarm(request: AlarmRequest): String? {
+        val nextAt = context.getSystemService(android.app.AlarmManager::class.java).nextAlarmClock?.triggerTime
+        if (request == AlarmRequest.Next) return AlarmCommands.next(System.currentTimeMillis(), nextAt)
+        var view = openAlarmList() ?: return null
+        val rows = linkedMapOf<String, AlarmRow>()
+        fun key(r: AlarmRow) = "${r.label}|${r.hour}:${r.minute}|${r.days}"
+        // The list reopens where it was left: back to its top first, so no alarm above is missed.
+        for (i in 1..6) {
+            val list = view.lists.maxByOrNull { it.bounds.height } ?: break
+            val before = AlarmCommands.rows(view).map(::key)
+            phone.perform(view, AgentAction.Scroll(ScrollDir.UP, list.id)); delay(400)
+            view = phone.observe()?.let(ScreenCompactor::compact) ?: return null
+            if (AlarmCommands.rows(view).map(::key) == before) break
+        }
+        // Reads the list down to its end (it scrolls), stopping early once [found] is on screen.
+        suspend fun walk(found: (AlarmRow) -> Boolean = { false }): AlarmRow? {
+            repeat(6) {
+                AlarmCommands.rows(view).forEach { rows[key(it)] = it }
+                AlarmCommands.rows(view).firstOrNull(found)?.let { return it }
+                val list = view.lists.maxByOrNull { it.bounds.height } ?: return null
+                val before = AlarmCommands.rows(view).map(::key)
+                phone.perform(view, AgentAction.Scroll(ScrollDir.DOWN, list.id)); delay(500)
+                view = phone.observe()?.let(ScreenCompactor::compact) ?: return null
+                if (AlarmCommands.rows(view).map(::key) == before) return null
+            }
+            return null
+        }
+        if (request == AlarmRequest.List) { walk(); return AlarmCommands.summary(rows.values.toList()) }
+        val target = (request as? AlarmRequest.Switch)?.target ?: (request as AlarmRequest.Sound).target
+        val wanted: (AlarmRow) -> Boolean = when (target) {
+            AlarmTarget.Next -> { row -> nextAt != null && AlarmCommands.rowAt(listOf(row), nextAt) != null }
+            is AlarmTarget.At -> { row -> AlarmCommands.rowsAt(listOf(row), target.hour, target.minute).isNotEmpty() }
+        }
+        val row = walk(wanted) ?: return when (target) {
+            AlarmTarget.Next -> if (nextAt == null) "예정된 알람이 없어요." else null
+            is AlarmTarget.At -> "${AlarmCommands.clock(target.hour, target.minute)} 알람을 찾지 못했어요."
+        }
+        val name = AlarmCommands.describe(row)
+        return when (request) {
+            is AlarmRequest.Switch -> switchAlarm(view, row, request, name, nextAt)
+            is AlarmRequest.Sound -> alarmSound(view, row, request.name, name)
+            else -> null
+        }
+    }
+
+    private suspend fun openAlarmList(): ScreenView? {
+        runCatching { context.startActivity(Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            .onFailure { return null }
+        return withTimeoutOrNull(4000) {
+            while (true) {
+                phone.observe()?.let(ScreenCompactor::compact)?.takeIf { AlarmCommands.rows(it).isNotEmpty() }?.let { return@withTimeoutOrNull it }
+                delay(150)
+            }
+            @Suppress("UNREACHABLE_CODE") null
+        }
+    }
+
+    private suspend fun switchAlarm(view: ScreenView, row: AlarmRow, request: AlarmRequest.Switch, name: String, nextAt: Long?): String? {
+        if (row.on == request.on) return "$name 알람은 이미 ${if (row.on) "켜져" else "꺼져"} 있어요."
+        if (!phone.perform(view, AgentAction.Click(row.id))) return null
+        // The switch's own state is the proof.
+        val switched = withTimeoutOrNull(3000) {
+            while (true) {
+                delay(200)
+                val now = phone.observe()?.let(ScreenCompactor::compact) ?: continue
+                AlarmCommands.rows(now).firstOrNull { it.label == row.label && it.hour == row.hour && it.minute == row.minute && it.days == row.days }
+                    ?.takeIf { it.on == request.on }?.let { return@withTimeoutOrNull true }
+            }
+            @Suppress("UNREACHABLE_CODE") false
+        } == true
+        if (!switched) return null
+        if (request.on) return "$name 알람을 켰어요."
+        if (!request.once || row.days.isEmpty()) return "$name 알람을 껐어요."
+        // A repeating alarm skipped once: back on right after the ring it skips.
+        val ring = nextAt?.takeIf { AlarmCommands.rowAt(listOf(row), it) != null } ?: nextRing(row)
+        AlarmSkips.schedule(context, AlarmSkips.Skip(row.hour, row.minute, row.days, row.label, ring))
+        val day = AlarmCommands.next(System.currentTimeMillis(), ring).removePrefix("다음 알람은 ").substringBefore("이에요.")
+        return "$day 알람 한 번만 울리지 않게 껐어요. 그 뒤에는 다시 켜져요."
+    }
+
+    /** When a repeating alarm rings next, from its days and time. */
+    private fun nextRing(row: AlarmRow): Long {
+        val c = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, row.hour); set(java.util.Calendar.MINUTE, row.minute)
+            set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+        }
+        repeat(8) {
+            if (c.timeInMillis > System.currentTimeMillis() && c.get(java.util.Calendar.DAY_OF_WEEK) in row.days) return c.timeInMillis
+            c.add(java.util.Calendar.DAY_OF_MONTH, 1)
+        }
+        return c.timeInMillis
+    }
+
+    /**
+     * Opens the alarm's sound choice. A named sound is picked from the ringtone list and saved; with no
+     * name the choice is left open for the user, who knows what they want to hear.
+     */
+    private suspend fun alarmSound(list: ScreenView, row: AlarmRow, sound: String?, name: String): String? {
+        suspend fun screen() = phone.observe()?.let(ScreenCompactor::compact)
+        suspend fun press(view: ScreenView, pick: (Element) -> Boolean): ScreenView? {
+            val e = view.elements.firstOrNull { it.enabled && it.kind != Kind.TEXT && pick(it) } ?: return null
+            if (!phone.perform(view, AgentAction.Click(e.id))) return null
+            delay(900)
+            return screen()
+        }
+        // The row (not its switch) opens the alarm's editor.
+        val item = list.elements.firstOrNull { it.kind == Kind.ITEM && it.bounds.centerY in list.element(row.id)!!.bounds.top..list.element(row.id)!!.bounds.bottom }
+            ?: return null
+        if (!phone.perform(list, AgentAction.Click(item.id))) return null
+        delay(1000)
+        val editor = screen() ?: return null
+        val picker = press(editor) { Regex("^소리\\b").containsMatchIn(it.label.trim()) } ?: return null
+        if (sound == null) return "$name 알람의 알람음 화면을 열었어요. 원하는 소리를 고른 뒤 뒤로 가서 저장을 눌러 주세요."
+        val tones = press(picker) { it.label.contains("벨소리") } ?: return null
+        // The clock app may ask for access to the phone's audio first: that answer is the user's.
+        if (tones.snapshot.packageName.contains("permissioncontroller"))
+            return "시계 앱이 음악·오디오 접근 권한을 묻고 있어요. 허용할지 직접 골라 주세요. 그다음 다시 말씀해 주시면 '$sound'을(를) 찾을게요."
+        val wanted = GoalText.normalize(sound)
+        val tone = tones.elements.firstOrNull { it.enabled && GoalText.normalize(it.label).contains(wanted) }
+            ?: return "'$sound' 알람음을 찾지 못했어요. 알람음 목록을 열어 두었어요."
+        if (!phone.perform(tones, AgentAction.Click(tone.id))) return null
+        delay(600)
+        // Back to the editor (the choice is kept), then save.
+        repeat(3) {
+            val now = screen() ?: return null
+            now.elements.firstOrNull { it.enabled && it.kind == Kind.BUTTON && it.label.trim() == "저장" }?.let { save ->
+                return if (phone.perform(now, AgentAction.Click(save.id))) "$name 알람음을 '${tone.label.trim()}'(으)로 바꿨어요." else null
+            }
+            phone.perform(now, AgentAction.Back); delay(700)
+        }
+        return null
+    }
 
     /**
      * "종료해줘" / "네이버 지도 종료해줘": leave the app for the home screen. (Android 14+ lets an app end

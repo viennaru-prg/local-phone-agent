@@ -50,6 +50,8 @@ interface Tools {
     suspend fun openDirect(goal: String): String? = null
     /** Time, battery, volume, timer, alarm: answered or done by Android directly; null = not handled. */
     suspend fun quick(request: QuickRequest): String? = null
+    /** Alarm questions and changes ([AlarmRequest]); null = not handled, the screen agent takes over. */
+    suspend fun alarm(request: AlarmRequest): String? = null
     /** Closes the named app, or the one in front for null. Never this assistant itself. */
     suspend fun closeApp(name: String?, guidanceChecked: Boolean = false): CloseResult = CloseResult.NotAnApp
 }
@@ -176,12 +178,24 @@ class Assistant(
                 QuickRequest.Battery -> "배터리 확인 중…"
                 is QuickRequest.Volume -> "볼륨 조절 중…"
                 is QuickRequest.Timer -> "타이머 설정 중…"
-                is QuickRequest.Alarm -> "알람 설정 중…"
+                is QuickRequest.Alarm, is QuickRequest.AlarmIn -> "알람 설정 중…"
             })
             tools.quick(request)?.let { say ->
                 listener.step(StepRecord(0, "android_api", "", "", request.toString(), "완료", "Android 기능으로 바로 처리", 0, 0))
                 return AgentResult(Outcome.DONE, say, emptyList())
             }
+        }
+        AlarmCommands.parse(goal)?.let { request ->
+            listener.progress(when (request) {
+                AlarmRequest.Next -> "다음 알람 확인 중…"; AlarmRequest.List -> "알람 목록 확인 중…"
+                is AlarmRequest.Switch -> "알람 ${if (request.on) "켜는" else "끄는"} 중…"; is AlarmRequest.Sound -> "알람음 화면 여는 중…"
+            })
+            val say = tools.alarm(request)
+            listener.step(StepRecord(0, "android_api", "", "", request.toString(), if (say != null) "완료" else "실패", "시계 앱 알람", 0, 0))
+            // Never handed to the screen agent: it once opened "알람 추가" and switched days off while
+            // claiming to have turned an alarm off. The user's alarms are changed only by these steps.
+            return if (say != null) AgentResult(Outcome.DONE, say, emptyList())
+                else AgentResult(Outcome.FAILED, "알람을 바꾸지 못했어요. 시계 앱에서 직접 확인해 주세요.", emptyList())
         }
         AppClose.target(goal)?.let { name ->
             val named = name.ifEmpty { null }

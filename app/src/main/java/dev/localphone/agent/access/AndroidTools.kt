@@ -172,6 +172,7 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
                 val days = AlarmCommands.dayWords(request.days)?.let { if (it == "매일" || it == "평일" || it == "주말") "$it " else "매주 $it " }.orEmpty()
                 "$days${AlarmCommands.clock(request.hour, request.minute)}${request.label?.let { " '$it'" }.orEmpty()} 알람을 맞췄어요."
             }
+            is QuickRequest.Weather -> weather(request)
             is QuickRequest.AlarmIn -> {
                 val at = java.util.Calendar.getInstance().apply { add(java.util.Calendar.MINUTE, request.minutes) }
                 val hour = at.get(java.util.Calendar.HOUR_OF_DAY); val minute = at.get(java.util.Calendar.MINUTE)
@@ -181,6 +182,65 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
             }
         }
     }.onFailure { Log.w(TAG, "quick $request failed", it) }.getOrNull()
+
+    /**
+     * The forecast from Open-Meteo (no key) for the named place or where the phone is. Only coordinates
+     * rounded to about 1 km leave the phone. Always an answer: a failure says what is missing instead
+     * of handing the question to the screen agent.
+     */
+    private suspend fun weather(request: QuickRequest.Weather): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val (lat, lng, placeName) = if (request.place != null) {
+            val at = geocode(context, request.place!!) ?: return@withContext "'${request.place}'의 위치를 찾지 못했어요."
+            Triple(at.first, at.second, request.place)
+        } else {
+            if (context.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+                return@withContext "지금 있는 곳의 날씨를 알려면 위치 권한이 필요해요. 다음에 물어보실 때 허용해 주시거나, 도시 이름과 함께 말씀해 주세요."
+            val here = location() ?: return@withContext "지금 위치를 알 수 없어요. 위치 기능이 켜져 있는지 확인하거나 도시 이름과 함께 말씀해 주세요."
+            Triple(here.latitude, here.longitude, locality(here.latitude, here.longitude))
+        }
+        val la = "%.2f".format(Locale.US, lat); val lo = "%.2f".format(Locale.US, lng)
+        val forecast = runCatching { fetch("https://api.open-meteo.com/v1/forecast?latitude=$la&longitude=$lo" + Weather.FIELDS) }
+            .getOrNull() ?: return@withContext "날씨 정보를 받지 못했어요. 인터넷 연결을 확인해 주세요."
+        val air = if (request.focus == WeatherFocus.DUST)
+            runCatching { fetch("https://air-quality-api.open-meteo.com/v1/air-quality?latitude=$la&longitude=$lo&current=pm10,pm2_5&timezone=auto") }.getOrNull()
+        else null
+        runCatching { Weather.say(request, Weather.report(forecast, air), placeName, java.time.LocalDate.now(), java.time.LocalTime.now().hour) }
+            .onFailure { Log.w(TAG, "weather", it) }.getOrDefault("날씨 정보를 읽지 못했어요.")
+    }
+
+    private fun fetch(url: String): String {
+        val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+        c.connectTimeout = 5_000; c.readTimeout = 5_000
+        return try { c.inputStream.bufferedReader().use { it.readText() } } finally { c.disconnect() }
+    }
+
+    /** The phone's last known position, or a fresh one within 5 s. */
+    @android.annotation.SuppressLint("MissingPermission")
+    private suspend fun location(): android.location.Location? {
+        val lm = context.getSystemService(android.location.LocationManager::class.java)
+        val recent = lm.getProviders(true).mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }
+            .maxByOrNull { it.time }?.takeIf { System.currentTimeMillis() - it.time < 3 * 3_600_000L }
+        if (recent != null) return recent
+        val provider = listOf(android.location.LocationManager.NETWORK_PROVIDER, android.location.LocationManager.FUSED_PROVIDER)
+            .firstOrNull { runCatching { lm.isProviderEnabled(it) }.getOrDefault(false) } ?: return null
+        return withTimeoutOrNull(5_000) {
+            suspendCancellableCoroutine { c ->
+                lm.getCurrentLocation(provider, null, context.mainExecutor) { if (c.isActive) c.resume(it) }
+            }
+        }
+    }
+
+    /** "수원시" for the coordinates, when the geocoder knows it. */
+    private suspend fun locality(lat: Double, lng: Double): String? = runCatching {
+        val g = Geocoder(context, Locale.KOREA)
+        val a = if (Build.VERSION.SDK_INT >= 33) suspendCancellableCoroutine<android.location.Address?> { c ->
+            g.getFromLocation(lat, lng, 1, object : Geocoder.GeocodeListener {
+                override fun onGeocode(list: MutableList<android.location.Address>) { if (c.isActive) c.resume(list.firstOrNull()) }
+                override fun onError(message: String?) { if (c.isActive) c.resume(null) }
+            })
+        } else @Suppress("DEPRECATION") g.getFromLocation(lat, lng, 1)?.firstOrNull()
+        a?.locality ?: a?.subAdminArea ?: a?.adminArea
+    }.getOrNull()
 
     private fun setAlarm(hour: Int, minute: Int, days: List<Int>, label: String?) {
         val intent = Intent(android.provider.AlarmClock.ACTION_SET_ALARM)

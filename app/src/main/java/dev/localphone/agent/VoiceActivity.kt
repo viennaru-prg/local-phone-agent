@@ -83,6 +83,8 @@ class VoiceActivity : Activity() {
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        // Location answered (either way): the weather question goes on; without it the answer says so.
+        if (requestCode == LOCATION_REQUEST) { waitingForLocation?.let { (text, details) -> submit(text, details) }; return }
         if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) { listen() } else finish()
     }
 
@@ -104,8 +106,18 @@ class VoiceActivity : Activity() {
         }
     }
 
+    private var waitingForLocation: Pair<String, String?>? = null
+
     private fun submit(text: String, details: String? = null) {
         if (submitted || isFinishing) return
+        // A weather question about here needs the phone's location: Android asks the user once.
+        if (question == null && dev.localphone.core.Weather.parse(text)?.place == null && dev.localphone.core.Weather.parse(text) != null &&
+            checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED && waitingForLocation == null) {
+            waitingForLocation = text to details
+            heard.text = text
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION), LOCATION_REQUEST)
+            return
+        }
         submitted = true
         val id = invocation
         heard.text = text
@@ -134,5 +146,5 @@ class VoiceActivity : Activity() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-    companion object { const val EXTRA_QUESTION = "question" }
+    companion object { const val EXTRA_QUESTION = "question"; private const val LOCATION_REQUEST = 2 }
 }

@@ -16,10 +16,15 @@ sealed interface QuickRequest {
     data class Alarm(val hour: Int, val minute: Int, val days: List<Int> = emptyList(), val label: String? = null) : QuickRequest
     /** "30분 뒤에 알람": rings once, [minutes] from now. */
     data class AlarmIn(val minutes: Int) : QuickRequest
+    /** "내일 부산 비 와?": [place] null means where the phone is. */
+    data class Weather(val day: WeatherDay, val place: String?, val focus: WeatherFocus, val part: DayPart? = null,
+                       val allDay: Boolean = false) : QuickRequest
 }
 
 object QuickCommands {
     fun parse(goal: String): QuickRequest? {
+        // Weather first: "뭐 입고 나가" reads as two steps to GoalScope, but it is one question.
+        dev.localphone.core.Weather.parse(goal)?.let { return it }
         if (GoalScope.multiple(goal)) return null
         val g = GoalText.normalize(goal)
         if (Regex("몇\\s*시|시간\\s*(?:알려|좀|뭐)|지금\\s*시간").containsMatchIn(goal) && !Regex("걸려|남았|타이머|알람|맞춰").containsMatchIn(goal)) return QuickRequest.Time

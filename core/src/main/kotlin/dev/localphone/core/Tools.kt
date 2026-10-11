@@ -179,6 +179,7 @@ class Assistant(
                 is QuickRequest.Volume -> "볼륨 조절 중…"
                 is QuickRequest.Timer -> "타이머 설정 중…"
                 is QuickRequest.Alarm, is QuickRequest.AlarmIn -> "알람 설정 중…"
+                is QuickRequest.Weather -> "날씨 확인 중…"
             })
             tools.quick(request)?.let { say ->
                 listener.step(StepRecord(0, "android_api", "", "", request.toString(), "완료", "Android 기능으로 바로 처리", 0, 0))

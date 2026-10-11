@@ -31,6 +31,12 @@ class AlarmCommandsTest {
         assertEquals(AlarmRequest.Delete(AlarmTarget.At(5, 5)), AlarmCommands.parse("새벽 5시 5분 알람 삭제해줘"))
         assertEquals(AlarmRequest.Snooze(null), AlarmCommands.parse("다시 울려줘"))
         assertEquals(AlarmRequest.Snooze(5), AlarmCommands.parse("5분만 더 잘래"))
+        // Days, a name or a date narrow the time: "평일 7시" is not "토요일 7시".
+        assertEquals(AlarmRequest.Switch(AlarmTarget.At(7, 30, listOf(7)), on = false, once = false), AlarmCommands.parse("토요일 7시 반 알람 꺼줘"))
+        assertEquals(AlarmRequest.Delete(AlarmTarget.At(4, 44, (1..7).toList(), "테스트알람")), AlarmCommands.parse("'테스트알람' 매일 오전 4시 44분 알람 지워줘"))
+        val rows = listOf(AlarmRow(1, null, 7, 0, (2..6).toList(), true), AlarmRow(2, null, 7, 0, listOf(7), true))
+        assertEquals(2, AlarmCommands.matching(rows, AlarmTarget.At(7, 0)).size)
+        assertEquals(listOf(2), AlarmCommands.matching(rows, AlarmTarget.At(7, 0, listOf(7))).map { it.id })
         // Setting one is the quick command's; other words are not alarms.
         assertNull(AlarmCommands.parse("7시 알람 설정해줘"))
         assertNull(AlarmCommands.parse("음악 꺼줘"))

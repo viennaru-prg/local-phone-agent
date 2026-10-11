@@ -47,13 +47,16 @@ class LlamaModel(private val app: AgentApp) : LanguageModel {
     val loaded get() = handle != 0L
 
     /**
-     * Loads the model while the user is still speaking (memory only, no GPU decoding): most commands
-     * never need it, and decoding for nothing only heated the phone.
+     * Loads the model and decodes the step system prompt, once a command is known to need the screen
+     * agent. The model is never loaded for commands the rules finish (it stayed in memory for nothing),
+     * and every load is released again after a while, whether or not it was used.
      */
-    fun preload() { scope.launch { runCatching { mutex.withLock { ensureLoaded() } }.onFailure { Log.w(TAG, "preload", it) } } }
-
-    /** Loads the model and decodes the step system prompt, once a command is known to need the screen agent. */
-    fun prewarm() { scope.launch { runCatching { mutex.withLock { ensureLoaded(); warmPrefix() } }.onFailure { Log.w(TAG, "prewarm", it) } } }
+    fun prewarm() {
+        scope.launch {
+            runCatching { mutex.withLock { try { ensureLoaded(); warmPrefix() } finally { scheduleIdleUnload() } } }
+                .onFailure { Log.w(TAG, "prewarm", it) }
+        }
+    }
 
     /** The step system prompt is the long shared prefix of every step; cold, it costs ~14 s of prefill. */
     private suspend fun warmPrefix() {

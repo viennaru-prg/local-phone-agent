@@ -205,6 +205,9 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
         if (ringing && request is AlarmRequest.Switch && !request.on && request.target == AlarmTarget.Next) return ringingAction(snooze = false, null)
         val nextAt = context.getSystemService(android.app.AlarmManager::class.java).nextAlarmClock?.triggerTime
         if (request == AlarmRequest.Next) return AlarmCommands.next(System.currentTimeMillis(), nextAt)
+        // The list lives in the clock app, which does not open over the lock screen.
+        if (context.getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked)
+            return "휴대폰 잠금을 풀어 주시면 알람을 확인하고 바꿀게요."
             .also { if (nextAt != null) ConversationMemory.shared.rememberAlarm("다음 알람") }
         var view = openAlarmList() ?: return null
         val rows = linkedMapOf<String, AlarmRow>()
@@ -232,6 +235,7 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
         }
         if (request == AlarmRequest.List) {
             walk()
+            AlarmSkips.verify(context, rows.values.toList())
             ConversationMemory.shared.rememberAlarmList(AlarmCommands.spokenOrder(rows.values.toList()))
             return AlarmCommands.summary(rows.values.toList())
         }
@@ -239,44 +243,42 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
             is AlarmRequest.Switch -> request.target; is AlarmRequest.Sound -> request.target; is AlarmRequest.Delete -> request.target
             else -> return null
         }
-        // "내일 알람": which one rings first tomorrow is known only from the whole list.
+        fun same(a: AlarmRow, b: AlarmRow) = a.label == b.label && a.hour == b.hour && a.minute == b.minute && a.days == b.days && a.date == b.date
+        // Which alarm is meant is decided on the whole list: "내일 알람" (the first one tomorrow) and a time,
+        // narrowed by days, name or date. Two that fit are asked about, never guessed — for any change.
         var ringAt = nextAt
-        val tomorrow = if (target == AlarmTarget.Tomorrow) {
-            walk()
-            val first = AlarmCommands.tomorrow(rows.values.toList(), System.currentTimeMillis()) ?: return "내일 울릴 알람이 없어요."
-            if (first.ringsToday && request is AlarmRequest.Switch && !request.on)
-                return "${AlarmCommands.describe(first.row)} 알람은 오늘도 울려요. 지금 끄면 오늘 것도 울리지 않으니, 오늘 알람이 지난 뒤에 다시 말씀해 주세요."
-            ringAt = first.at
-            view = openAlarmList() ?: return null
-            first.row
-        } else null
-        val wanted: (AlarmRow) -> Boolean = when (target) {
-            AlarmTarget.Next -> { row -> nextAt != null && AlarmCommands.rowAt(listOf(row), nextAt) != null }
-            AlarmTarget.Tomorrow -> { row -> row.label == tomorrow!!.label && row.hour == tomorrow.hour && row.minute == tomorrow.minute && row.days == tomorrow.days }
-            is AlarmTarget.At -> { row -> AlarmCommands.rowsAt(listOf(row), target.hour, target.minute).isNotEmpty() }
+        val chosen: AlarmRow? = when (target) {
+            AlarmTarget.Next -> null
+            AlarmTarget.Tomorrow -> {
+                walk()
+                val first = AlarmCommands.tomorrow(rows.values.toList(), System.currentTimeMillis()) ?: return "내일 울릴 알람이 없어요."
+                if (first.ringsToday && request is AlarmRequest.Switch && !request.on)
+                    return "${AlarmCommands.describe(first.row)} 알람은 오늘도 울려요. 지금 끄면 오늘 것도 울리지 않으니, 오늘 알람이 지난 뒤에 다시 말씀해 주세요."
+                ringAt = first.at
+                first.row
+            }
+            is AlarmTarget.At -> {
+                walk()
+                val fits = AlarmCommands.matching(rows.values.toList(), target)
+                when (fits.size) {
+                    0 -> return "${listOfNotNull(AlarmCommands.dayWords(target.days), AlarmCommands.clock(target.hour, target.minute)).joinToString(" ")} 알람을 찾지 못했어요."
+                    1 -> fits[0]
+                    else -> return "${AlarmCommands.clock(target.hour, target.minute)} 알람이 ${fits.size}개 있어요: " +
+                        fits.joinToString(", ") { AlarmCommands.describe(it) } + ". 요일이나 이름까지 말씀해 주세요."
+                }
+            }
         }
-        val row = walk(wanted) ?: return when (target) {
-            AlarmTarget.Next -> if (nextAt == null) "예정된 알람이 없어요." else null
-            AlarmTarget.Tomorrow -> null
-            is AlarmTarget.At -> "${AlarmCommands.clock(target.hour, target.minute)} 알람을 찾지 못했어요."
-        }
+        // Only a list read to its end shows whether a skipped alarm came back (a partial read would miss it).
+        if (chosen != null) { AlarmSkips.verify(context, rows.values.toList()); view = openAlarmList() ?: return null }
+        val wanted: (AlarmRow) -> Boolean = if (chosen != null) { row -> same(row, chosen) }
+            else { row -> nextAt != null && AlarmCommands.rowAt(listOf(row), nextAt) != null }
+        val row = walk(wanted) ?: return if (target == AlarmTarget.Next && nextAt == null) "예정된 알람이 없어요." else null
         val name = AlarmCommands.describe(row)
-        ConversationMemory.shared.rememberAlarm("${AlarmCommands.clock(row.hour, row.minute)} 알람")
+        ConversationMemory.shared.rememberAlarm(AlarmCommands.phrase(row))
         return when (request) {
             is AlarmRequest.Switch -> switchAlarm(view, row, request, name, ringAt)
             is AlarmRequest.Sound -> alarmSound(view, row, request.name, name)
-            is AlarmRequest.Delete -> {
-                // Two alarms at that time ("평일 7시" and "토요일 7시"): ask, never pick one to delete.
-                if (target is AlarmTarget.At) {
-                    walk(); val same = AlarmCommands.rowsAt(rows.values.toList(), target.hour, target.minute)
-                    if (same.size > 1) return "${AlarmCommands.clock(target.hour, target.minute)} 알람이 ${same.size}개 있어요: " +
-                        same.joinToString(", ") { AlarmCommands.describe(it) } + ". 요일까지 말씀해 주시면 지울게요."
-                    view = openAlarmList() ?: return null
-                    val again = walk(wanted) ?: return null
-                    return deleteAlarm(view, again, AlarmCommands.describe(again))
-                }
-                deleteAlarm(view, row, name)
-            }
+            is AlarmRequest.Delete -> deleteAlarm(view, row, name)
             else -> null
         }
     }
@@ -367,7 +369,7 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
             @Suppress("UNREACHABLE_CODE") false
         } == true
         if (!switched) return null
-        if (request.on) return "$name 알람을 켰어요."
+        if (request.on) { AlarmSkips.forget(context, row.hour, row.minute, row.days, row.label); return "$name 알람을 켰어요." }
         if (!request.once || row.days.isEmpty()) return "$name 알람을 껐어요."
         // A repeating alarm skipped once: back on right after the ring it skips.
         val ring = nextAt?.takeIf { AlarmCommands.rowAt(listOf(row), it) != null } ?: nextRing(row)

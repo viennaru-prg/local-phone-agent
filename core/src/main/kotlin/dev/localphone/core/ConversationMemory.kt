@@ -84,7 +84,8 @@ class ConversationMemory(private val now: () -> Long = System::currentTimeMillis
 
     private fun alarm(g: String): Resolution? {
         val list = alarmList?.takeIf { now() - it.second <= ttlMs }?.first.orEmpty()
-        fun phrase(row: AlarmRow) = "${AlarmCommands.clock(row.hour, row.minute)} 알람"
+        // Days, name and date stay with it: "두 번째 거" is "평일 오전 6시 55분 알람", not any 6:55 alarm.
+        fun phrase(row: AlarmRow) = AlarmCommands.phrase(row)
         fun rewrite(range: IntRange, row: AlarmRow, what: String) =
             Resolution.Rewritten(g.replaceRange(range, phrase(row) + " ").replace(Regex("\\s+"), " ").trim(), "$what → ${AlarmCommands.describe(row)}")
         ordinal.find(g)?.let { m ->

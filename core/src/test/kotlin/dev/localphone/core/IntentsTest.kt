@@ -32,6 +32,22 @@ class IntentsTest {
         assertEquals("네이버 지도에서 카페 검색해줘", Intents.rewrite("네이버 지도에서 카페 좀 찾아봐", json("search", "카페", "네이버 지도")))
     }
 
+    @Test fun conditionsAreNeverDropped() {
+        // "주유소 들러" would vanish in "회사로 안내해줘": the command is kept as said.
+        assertNull(Intents.rewrite("회사 가면서 주유소 들러줘", json("navigate", "회사")))
+        assertNull(Intents.rewrite("더 크로스 말고 다른 노래 틀어줘", json("play_song", "더 크로스")))
+        assertNull(Intents.rewrite("내일 아침에 회사까지 얼마나 걸릴까", json("eta", "회사")))
+        // Without a condition the same reading is used.
+        assertEquals("회사로 안내해줘", Intents.rewrite("회사 가는 길 좀 알려줄래", json("navigate", "회사")))
+    }
+
+    @Test fun anAppTheUserDidNotNameIsRefused() {
+        // Never "close whatever is in front" because the model named some other app.
+        assertNull(Intents.rewrite("그거 이제 닫아줄래", json("close_app", "", "카카오톡")))
+        assertNull(Intents.rewrite("수요모임 가는 길 좀 알려줄래", json("navigate", "수요모임", "카카오맵")))
+        assertEquals("종료해줘", Intents.rewrite("이제 그만 닫을래", json("close_app")))
+    }
+
     @Test fun namesMustHaveBeenSaid() {
         // The model may only pick words out of the command, never supply a place of its own.
         assertNull(Intents.rewrite("수요모임 가는 길 좀 알려줄래", json("navigate", "수원집")))

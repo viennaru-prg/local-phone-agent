@@ -10,10 +10,14 @@ data class DisplayOptions(val goal: Boolean = true, val task: Boolean = true, va
 data class ResourceUsage(
     val totalCpu: Int? = null, val usedRam: Long? = null, val totalRam: Long? = null,
     val appCpu: Int? = null, val appRam: Long? = null,
+    /** Whether the language model is in memory (null: unknown). Its GPU buffers are not in [appRam]. */
+    val modelLoaded: Boolean? = null,
 ) {
     // Android 8+ keeps /proc/stat from apps: whole-device CPU is then left out instead of a lasting "—".
     val totalLine get() = "전체 ${totalCpu?.let { "CPU $it% · " }.orEmpty()}RAM ${usedRam?.let(::memory) ?: "—"}/${totalRam?.let(::memory) ?: "—"}"
-    val aiLine get() = "AI 앱 CPU ${percent(appCpu)} · RAM ${appRam?.let(::memory) ?: "—"}"
+    // The process RAM leaves out the model's GPU memory: said so, with whether the model is loaded at all.
+    val aiLine get() = "AI 앱 CPU ${percent(appCpu)} · RAM ${appRam?.let(::memory) ?: "—"}(GPU 제외)" +
+        when (modelLoaded) { true -> " · 모델 적재됨"; false -> " · 모델 없음"; null -> "" }
     private fun percent(value: Int?) = value?.let { "$it%" } ?: "—"
     private fun memory(bytes: Long): String = if (bytes < 1_073_741_824L) "${bytes / 1_048_576}M" else {
         val tenths = (bytes / 107_374_182.4).roundToInt()

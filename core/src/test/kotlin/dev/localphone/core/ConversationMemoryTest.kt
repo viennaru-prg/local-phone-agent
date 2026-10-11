@@ -32,9 +32,11 @@ class ConversationMemoryTest {
         assertEquals("다음 알람 꺼줘", rewritten("그 알람 꺼줘"))
         val list = listOf(row(6, 30, (2..6).toList()), row(6, 55, (2..6).toList()), row(7, 30, listOf(7)), row(7, 50, listOf(1)), row(14, 20, listOf(1)))
         memory.rememberAlarmList(AlarmCommands.spokenOrder(list))
-        assertEquals("오전 6시 55분 알람 꺼줘", rewritten("두 번째 거 꺼줘"))
-        assertEquals("오후 2시 20분 알람 지워줘", rewritten("마지막 알람 지워줘"))
-        assertEquals("오후 2시 20분 알람 꺼줘", rewritten("일요일 오후 거 꺼줘"))
+        assertEquals("평일 오전 6시 55분 알람 꺼줘", rewritten("두 번째 거 꺼줘"))
+        assertEquals("일요일 오후 2시 20분 알람 지워줘", rewritten("마지막 알람 지워줘"))
+        assertEquals("일요일 오후 2시 20분 알람 꺼줘", rewritten("일요일 오후 거 꺼줘"))
+        // The rewritten sentence names exactly that alarm again.
+        assertEquals(AlarmTarget.At(6, 55, (2..6).toList()), (AlarmCommands.parse(rewritten("두 번째 거 꺼줘")!!) as AlarmRequest.Switch).target)
         // Two fit "평일": asked, never guessed.
         assertTrue(memory.resolve("평일 거 지워줘") is ConversationMemory.Resolution.Unclear)
     }

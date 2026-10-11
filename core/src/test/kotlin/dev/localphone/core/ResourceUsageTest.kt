@@ -32,6 +32,7 @@ class ResourceUsageTest {
     @Test fun memoryStaysCompactEnoughForOneLine() {
         val reading = ResourceUsage(45, 8_589_934_592, 12_884_901_888, 25, 1_610_612_736)
         assertEquals("전체 CPU 45% · RAM 8.0G/12.0G", reading.totalLine)
-        assertEquals("AI 앱 CPU 25% · RAM 1.5G", reading.aiLine)
+        assertEquals("AI 앱 CPU 25% · RAM 1.5G(GPU 제외)", reading.aiLine)
+        assertEquals("AI 앱 CPU 25% · RAM 1.5G(GPU 제외) · 모델 없음", reading.copy(modelLoaded = false).aiLine)
     }
 }

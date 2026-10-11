@@ -66,7 +66,7 @@ class AgentService : Service() {
             if (id == runId && displayRunning) {
                 AgentAccessibilityService.instance?.let { a11y ->
                     displayedGoal?.let(a11y::beginRun)
-                    a11y.showStatus(displayedTask, importantStatus); a11y.showUsage(value)
+                    a11y.showStatus(displayedTask, importantStatus); a11y.showUsage(value.copy(modelLoaded = app.llm.loaded))
                 }
             }
         }

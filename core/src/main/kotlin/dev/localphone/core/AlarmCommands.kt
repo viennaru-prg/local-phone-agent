@@ -7,7 +7,8 @@ sealed interface AlarmTarget {
     data object Next : AlarmTarget
     /** "내일 알람": the first alarm that rings tomorrow. */
     data object Tomorrow : AlarmTarget
-    data class At(val hour: Int, val minute: Int) : AlarmTarget
+    /** A time, narrowed by the days, name or date the command also gave ("평일 7시", "'운동' 7시", "10월 12일 7시"). */
+    data class At(val hour: Int, val minute: Int, val days: List<Int> = emptyList(), val label: String? = null, val date: String? = null) : AlarmTarget
 }
 
 /**
@@ -38,7 +39,9 @@ object AlarmCommands {
         if (Regex("다시\\s*울려|스누즈|snooze|(?:분|조금)만\\s*더\\s*(?:잘|자)", RegexOption.IGNORE_CASE).containsMatchIn(goal))
             return AlarmRequest.Snooze(Regex("(\\d+|[가-힣]+?)\\s*분").find(goal)?.groupValues?.get(1)?.let(QuickCommands::number))
         if (!Regex("알람|알림\\s*소리").containsMatchIn(goal)) return null
-        val target = time(goal)?.let { (h, m) -> AlarmTarget.At(h, m) }
+        val target = time(goal)?.let { (h, m) ->
+            AlarmTarget.At(h, m, days(goal), Regex("[\"'“‘]([^\"'”’]{1,20})[\"'”’]").find(goal)?.groupValues?.get(1)?.trim(),
+                date.find(goal)?.value?.replace(Regex("\\s+"), " ")) }
             ?: if (Regex("내일").containsMatchIn(goal)) AlarmTarget.Tomorrow else AlarmTarget.Next
         if (Regex("소리|음악|노래|벨소리|알람음|음원").containsMatchIn(goal) && Regex("바꿔|변경|교체|바꾸|설정").containsMatchIn(goal))
             return AlarmRequest.Sound(target, soundName(goal))
@@ -193,6 +196,15 @@ object AlarmCommands {
             TomorrowRing(row, at, today)
         }.minByOrNull { it.at }
     }
+
+    /** The rows a target names: its time, and its days, name and date when the command gave them. */
+    fun matching(rows: List<AlarmRow>, target: AlarmTarget.At): List<AlarmRow> = rowsAt(rows, target.hour, target.minute).filter { r ->
+        (target.days.isEmpty() || r.days == target.days) && (target.label == null || r.label == target.label) &&
+            (target.date == null || r.date?.replace(Regex("\\s+"), " ")?.startsWith(target.date) == true)
+    }
+
+    /** How to name a row again in a command ("평일 오전 6시 55분 알람"): the rules read every part of it back. */
+    fun phrase(row: AlarmRow): String = "${describe(row)} 알람"
 
     fun rowsAt(rows: List<AlarmRow>, hour: Int, minute: Int): List<AlarmRow> = rows.filter { it.hour == hour && it.minute == minute }
         .ifEmpty { if (hour < 12) rows.filter { it.hour == hour + 12 && it.minute == minute } else emptyList() }

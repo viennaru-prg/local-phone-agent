@@ -36,6 +36,10 @@ object Intents {
 
     fun prompt(goal: String) = ModelPrompt(SYSTEM, "$goal →")
 
+    private val conditional = setOf("navigate", "eta", "play_song", "playlist_add", "playlist_remove", "open_screen", "search")
+    private val conditions = Regex("들러|들렀|들렸|경유|거쳐|가면서|오면서|하면서|가는\\s*길에|말고|제외|빼고|피해|없이|가장|제일|최단|최소|최대|" +
+        "가까운|저렴|싼\\s|이상|이하|중에서|먼저|다음에|부터|만\\s*(?:틀어|보여|찾아)")
+
     /**
      * Worth asking: a sentence no rule recognized, including wishes the request words miss ("늙은 사랑
      * 듣고 싶어", "…볼래"). Bare names ("이름 모임") and chatter are answered as before.
@@ -54,11 +58,23 @@ object Intents {
         // Names must have been said: the model may only pick out words, never supply them.
         val said = GoalText.normalize(goal)
         fun spoken(text: String) = text.isNotEmpty() && GoalText.normalize(text).let { it.isNotEmpty() && said.contains(it) }
+        // An app the user never named means the model guessed: the whole reading is dropped.
+        if (app.isNotEmpty() && !spoken(app)) return null
+        // The plain sentences carry a place, a song, a screen, nothing more. A command with a condition
+        // ("회사 가면서 주유소 들러줘", "더 크로스 말고", "내일 아침 회사까지") is kept as said: dropping the
+        // condition would do something else than asked.
+        if (intent in conditional && conditions.containsMatchIn(goal)) return null
+        if ((intent == "navigate" || intent == "eta") && Regex("내일|모레|출발|도착|시에|시쯤").containsMatchIn(goal)) return null
         val sentence = when (intent) {
             "navigate" -> target.takeIf(::spoken)?.let { "${withRo(it)} 안내해줘" }
             "eta" -> target.takeIf(::spoken)?.let { "${it}까지 얼마나 걸려" }
             "end_navigation" -> "내비게이션 꺼줘"
-            "close_app" -> app.takeIf(::spoken)?.let { "$it 종료해줘" } ?: "종료해줘"
+            // An app the user did not name is refused, never turned into "close whatever is in front".
+            "close_app" -> when {
+                app.isEmpty() -> "종료해줘"
+                spoken(app) -> "$app 종료해줘"
+                else -> null
+            }
             "play_song" -> target.takeIf(::spoken)?.let { "$it 틀어줘" }
             "media" -> when (target.lowercase()) {
                 "play" -> "음악 틀어줘"; "pause" -> "음악 멈춰줘"; "next" -> "다음 곡 틀어줘"; "previous" -> "이전 곡 틀어줘"; else -> null

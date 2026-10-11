@@ -7,8 +7,8 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
-import android.app.PendingIntent
-import android.content.pm.PackageInstaller
+import android.content.ClipData
+import androidx.core.content.FileProvider
 import dev.localphone.agent.BuildConfig
 import dev.localphone.core.*
 import kotlinx.coroutines.Dispatchers
@@ -82,9 +82,10 @@ class AppUpdates(private val context: Context) {
     fun permissionIntent() = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
 
     /**
-     * Hands the verified APK straight to Android's package installer. A plain "open this APK" intent
-     * made Android ask which app should open it (file managers can too); a session goes to the installer
-     * itself, which then shows its own update confirmation to the user ([InstallResult]).
+     * Hands the verified APK to Android's own package installer app. A plain "open this APK" intent made
+     * Android ask which app should open it (file managers can too); naming the system installer opens
+     * its update confirmation directly. The install itself must stay with that installer: one submitted
+     * by this app was refused by Samsung's Auto Blocker ("INSTALL_FAILED_VERIFICATION_FAILURE").
      */
     fun installPending(): Boolean {
         if (!canInstall()) return false
@@ -93,41 +94,21 @@ class AppUpdates(private val context: Context) {
             val buffer = ByteArray(64 * 1024); while (true) { val n = it.read(buffer); if (n < 0) break; update(buffer, 0, n) }
         }.digest().hex() } == update.sha256) { "설치 파일이 변경되었습니다. 다시 받아 주세요." }
         verifyArchive(file, update)
-        val installer = context.packageManager.packageInstaller
-        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
-            setAppPackageName(context.packageName); setSize(file.length())
-        }
-        val id = installer.createSession(params)
-        installer.openSession(id).use { session ->
-            session.openWrite(UpdateContract.APK, 0, file.length()).use { out ->
-                file.inputStream().use { it.copyTo(out, 64 * 1024) }
-                session.fsync(out)
-            }
-            val result = PendingIntent.getBroadcast(context, id, Intent(context, InstallResult::class.java),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
-            session.commit(result.intentSender)
-        }
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.updates", file)
+        val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            .apply { clipData = ClipData.newRawUri("APK", uri) }
+        systemInstaller(intent)?.let { intent.setPackage(it) }
+        context.startActivity(intent)
         pending = null
         return true
     }
 
-    /** The installer's answer: its confirmation screen to show, or how the install ended. */
-    class InstallResult : android.content.BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
-                PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                    @Suppress("DEPRECATION") val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
-                    context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                }
-                PackageInstaller.STATUS_SUCCESS -> android.util.Log.i("AgentUpdate", "installed")
-                else -> {
-                    val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "설치하지 못했습니다."
-                    android.util.Log.w("AgentUpdate", "install failed: $message")
-                    android.widget.Toast.makeText(context, "업데이트 설치 실패: $message", android.widget.Toast.LENGTH_LONG).show()
-                }
-            }
-        }
-    }
+    /** The phone's built-in package installer among the apps that open an APK (not a file manager). */
+    private fun systemInstaller(intent: Intent): String? = context.packageManager
+        .queryIntentActivities(intent, PackageManager.MATCH_SYSTEM_ONLY)
+        .map { it.activityInfo.packageName }
+        .firstOrNull { Regex("packageinstaller", RegexOption.IGNORE_CASE).containsMatchIn(it) }
 
     private fun signers(info: PackageInfo) = info.signingInfo?.apkContentsSigners.orEmpty()
         .map { MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).hex() }.toSet()

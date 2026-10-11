@@ -210,19 +210,19 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
         val today = java.time.LocalDate.now()
         val target = when (request.day) { WeatherDay.TOMORROW -> today.plusDays(1); WeatherDay.DAY_AFTER -> today.plusDays(2); else -> today }
         val archive = "https://archive-api.open-meteo.com/v1/archive?latitude=$la&longitude=$lo&timezone=auto"
-        val normal = if (request.compare == WeatherCompare.NORMAL) runCatching {
-            // 30 years of daily means (~190 KB, ~5 s) do not change: kept per place after the first answer.
-            val cache = java.io.File(context.cacheDir, "normals-$la-$lo-${today.year}.json")
+        val normals = if (request.compare == WeatherCompare.NORMAL) runCatching {
+            // 30 years of daily means, lows and highs (~0.5 MB, a few seconds) do not change: kept per place.
+            val cache = java.io.File(context.cacheDir, "normals2-$la-$lo-${today.year}.json")
             val series = cache.takeIf { it.isFile }?.readText()
-                ?: fetch("$archive&start_date=${today.year - 30}-01-01&end_date=${today.year - 1}-12-31&daily=temperature_2m_mean", 15_000)
-                    .also { cache.writeText(it) }
-            Weather.normal(series, target)
+                ?: fetch("$archive&start_date=${today.year - 30}-01-01&end_date=${today.year - 1}-12-31" +
+                    "&daily=temperature_2m_mean,temperature_2m_min,temperature_2m_max", 20_000).also { cache.writeText(it) }
+            Weather.normals(series, target)
         }.getOrNull() else null
         val lastYear = if (request.compare == WeatherCompare.LAST_YEAR) runCatching {
             val d = target.minusYears(1)
             Weather.archiveDay(fetch("$archive&start_date=$d&end_date=$d&daily=temperature_2m_mean,temperature_2m_max,temperature_2m_min"))
         }.getOrNull() else null
-        runCatching { Weather.say(request, Weather.report(forecast, air).copy(normal = normal, lastYear = lastYear), placeName, today, java.time.LocalTime.now().hour) }
+        runCatching { Weather.say(request, Weather.report(forecast, air).copy(normal = normals?.first, normalMin = normals?.second, normalMax = normals?.third, lastYear = lastYear), placeName, today, java.time.LocalTime.now().hour) }
             .onFailure { Log.w(TAG, "weather", it) }.getOrDefault("날씨 정보를 읽지 못했어요.")
     }
 

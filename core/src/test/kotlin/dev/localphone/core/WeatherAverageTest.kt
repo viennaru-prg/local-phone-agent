@@ -67,6 +67,22 @@ class WeatherAverageTest {
         assertEquals(true, Weather.say(w("내일이 오늘보다 추워?")!!, same, null, today, 15).contains("최고 기온은 25도로 오늘과 비슷해요."))
     }
 
+    @Test fun aPartOfTheDayAgainstTheNormalOrAnotherDay() {
+        val r = w("내일 아침 기온 평년대비 어때?")!!
+        assertEquals(Triple(WeatherDay.TOMORROW, DayPart.MORNING, WeatherCompare.NORMAL), Triple(r.day, r.part, r.compare))
+        val withNormals = Weather.report(forecast).copy(normal = 16.4, normalMin = 10.6, normalMax = 21.3)
+        // Tomorrow (10-12): low 16, high 26 in this data.
+        assertEquals("내일 아침 최저 기온은 약 16.0도로 평년(약 10.6도)보다 5.4도 높아요.", say("내일 아침 기온 평년대비 어때?", withNormals))
+        assertEquals("내일 낮 최고 기온은 약 26.0도로 평년(약 21.3도)보다 4.7도 높아요.", say("내일 낮 기온 평년보다 높아?", withNormals))
+    }
+
+    @Test fun aPartOfTheDayBetweenTheDayAndTheComparison() {
+        val a = w("내일 아침이 오늘 아침보다 추워?")!!
+        assertEquals(Triple(WeatherDay.TOMORROW, DayPart.MORNING, WeatherCompare.TODAY), Triple(a.day, a.part, a.compare))
+        val b = w("오늘 저녁 기온 어제 저녁보다 어때?")!!
+        assertEquals(Triple(WeatherDay.TODAY, DayPart.EVENING, WeatherCompare.YESTERDAY), Triple(b.day, b.part, b.compare))
+    }
+
     @Test fun theNormalIsTheAverageAroundThatDayOfTheYear() {
         val json = """{"daily":{"time":["2020-10-08","2020-10-11","2020-10-20","2021-10-12"],"temperature_2m_mean":[14.0,16.0,8.0,18.0]}}"""
         assertEquals(16.0, Weather.normal(json, LocalDate.of(2026, 10, 11)))

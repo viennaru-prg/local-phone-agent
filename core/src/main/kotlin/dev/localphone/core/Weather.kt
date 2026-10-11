@@ -44,8 +44,9 @@ object Weather {
         val compare = when {
             Regex("평년|예년").containsMatchIn(g) -> WeatherCompare.NORMAL
             Regex("작년|지난\\s*해|1년\\s*전").containsMatchIn(g) -> WeatherCompare.LAST_YEAR
-            Regex("어제\\s*(?:보다|랑|와|하고|에\\s*비해|대비)").containsMatchIn(g) -> WeatherCompare.YESTERDAY
-            Regex("오늘\\s*(?:보다|이랑|과|하고|에\\s*비해|대비)").containsMatchIn(g) && Regex("내일|모레").containsMatchIn(g) -> WeatherCompare.TODAY
+            // "어제보다", "어제 저녁보다", "오늘 아침이랑" (a part of the day may come between).
+            Regex("어제\\s*(?:아침|오전|점심|낮|오후|저녁|밤)?\\s*(?:보다|이랑|랑|과|와|하고|에\\s*비해|대비)").containsMatchIn(g) -> WeatherCompare.YESTERDAY
+            Regex("오늘\\s*(?:아침|오전|점심|낮|오후|저녁|밤)?\\s*(?:보다|이랑|랑|과|하고|에\\s*비해|대비)").containsMatchIn(g) && Regex("내일|모레").containsMatchIn(g) -> WeatherCompare.TODAY
             else -> WeatherCompare.NONE
         }
         val tempWord = Regex("기온|온도|몇\\s*도|더워|덥|추워|춥|쌀쌀|따뜻|선선|시원|포근")
@@ -121,7 +122,9 @@ object Weather {
                       val pm10: Double? = null, val pm25: Double? = null, val hours: List<Hour> = emptyList(),
                       val humidity: Int? = null, val wind: Double? = null,
                       /** The 30-year average daily mean around this date, and the same date a year ago. */
-                      val normal: Double? = null, val lastYear: Day? = null)
+                      val normal: Double? = null, val lastYear: Day? = null,
+                      /** The normal lowest and highest of the day (the morning compares lows, the afternoon highs). */
+                      val normalMin: Double? = null, val normalMax: Double? = null)
 
     /** The query the app sends (Open-Meteo forecast, wind in m/s). */
     const val FIELDS = "&current=temperature_2m,apparent_temperature,weather_code,precipitation,relative_humidity_2m,wind_speed_10m" +
@@ -266,16 +269,21 @@ object Weather {
     }.getOrNull()
 
     /** The normal: the archive's daily means within 3 days of [date]'s day of the year, over all its years. */
-    fun normal(json: String, date: LocalDate): Double? = runCatching {
+    fun normal(json: String, date: LocalDate): Double? = normals(json, date).first
+
+    /** Normal mean, lowest and highest (each null when the series lacks it). */
+    fun normals(json: String, date: LocalDate): Triple<Double?, Double?, Double?> = runCatching {
         val d = JsonParser.parseString(json).asJsonObject.getAsJsonObject("daily")
-        val times = d.getAsJsonArray("time"); val means = d.getAsJsonArray("temperature_2m_mean")
+        val times = d.getAsJsonArray("time")
         val target = date.dayOfYear
-        (0 until times.size()).mapNotNull { i ->
+        val near = (0 until times.size()).filter { i ->
             val day = LocalDate.parse(times[i].asString).dayOfYear
-            val gap = minOf(Math.abs(day - target), 365 - Math.abs(day - target))
-            means[i].takeUnless { it.isJsonNull }?.asDouble?.takeIf { gap <= 3 }
-        }.takeIf { it.isNotEmpty() }?.average()
-    }.getOrNull()
+            minOf(Math.abs(day - target), 365 - Math.abs(day - target)) <= 3
+        }
+        fun avg(key: String) = d.getAsJsonArray(key)?.let { a -> near.mapNotNull { a[it].takeUnless { v -> v.isJsonNull }?.asDouble } }
+            ?.takeIf { it.isNotEmpty() }?.average()
+        Triple(avg("temperature_2m_mean"), avg("temperature_2m_min"), avg("temperature_2m_max"))
+    }.getOrDefault(Triple(null, null, null))
 
     private fun one(v: Double) = "%.1f도".format(java.util.Locale.US, v)
     private fun meanOf(r: Report, d: Day) = d.mean ?: r.hours.filter { it.time.toLocalDate() == d.date }.map { it.temperature }
@@ -313,6 +321,20 @@ object Weather {
         val d = dayOf(target)
         when (request.compare) {
             WeatherCompare.NORMAL -> {
+                // "내일 아침 기온 평년대비": the morning is near the day's low, the afternoon at its high.
+                val part = request.part
+                if (part != null && d != null) {
+                    val partHours = r.hours.filter { it.time.toLocalDate() == target && it.time.hour in part.hours }.map { it.temperature }
+                    val partAvg = partHours.takeIf { it.isNotEmpty() }?.average()
+                    val (kind, value, normal) = when (part) {
+                        DayPart.MORNING, DayPart.NIGHT -> Triple("최저", d.min, r.normalMin)
+                        DayPart.AFTERNOON -> Triple("최고", d.max, r.normalMax)
+                        DayPart.EVENING -> Triple("평균", meanOf(r, d), r.normal)
+                    }
+                    if (normal != null) return "${dayLabel(target, today)} ${part.label} ${where}${kind} 기온은 약 ${one(value)}로 " +
+                        "${than("평년(약 ${one(normal)})", value - normal, past).replace(")와", ")과")}." +
+                        (partAvg?.let { " ${part.label}(${part.hours.first}~${part.hours.last + 1}시) 평균은 약 ${one(it)}예요." } ?: "")
+                }
                 val n = r.normal ?: return "평년 기온 정보를 받지 못했어요."
                 val x = d ?: return "${dayLabel(target, today)} ${where}평년 평균 기온은 약 ${one(n)}예요."
                 val m = meanOf(r, x)
@@ -330,6 +352,17 @@ object Weather {
                 val subject = if (request.compare == WeatherCompare.YESTERDAY) today else target
                 val a = dayOf(subject) ?: return "예보를 받지 못했어요."
                 val b = dayOf(base) ?: return "${dayLabel(base, today)} 기록을 받지 못했어요."
+                // "내일 아침이 오늘 아침보다 추워?": the same hours of both days.
+                request.part?.let { part ->
+                    fun avg(date: LocalDate) = r.hours.filter { it.time.toLocalDate() == date && it.time.hour in part.hours }.map { it.temperature }
+                        .takeIf { it.isNotEmpty() }?.average()
+                    val pa = avg(subject); val pb = avg(base)
+                    if (pa != null && pb != null) {
+                        val baseName = "${dayLabel(base, today)} ${part.label}"
+                        return "${dayLabel(subject, today)} ${part.label}(${part.hours.first}~${part.hours.last + 1}시) ${where}기온은 평균 약 ${one(pa)}로 " +
+                            "${fix(than("$baseName(약 ${one(pb)})", pa - pb), part.label)}."
+                    }
+                }
                 val (ma, mb) = meanOf(r, a) to meanOf(r, b)
                 val feel = when { ma - mb >= 0.5 -> "따뜻해요"; ma - mb <= -0.5 -> "쌀쌀해요"; else -> "비슷해요" }
                 val baseName = dayLabel(base, today)

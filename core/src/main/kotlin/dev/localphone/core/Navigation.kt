@@ -110,10 +110,16 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
     fun etaAnswer(view: ScreenView): String? {
         if (!eta || evidence.state != "PREVIEW" || !destinationBound) return null
         val labels = view.elements.map { it.label }
-        val time = labels.firstNotNullOfOrNull { Regex("(\\d+\\s*시간\\s*)?\\d+\\s*분").find(it)?.value }
-            ?: labels.firstNotNullOfOrNull { Regex("\\d+\\s*시간").find(it)?.value } ?: return null
+        val timeRx = Regex("(\\d+\\s*시간\\s*)?\\d+\\s*분|\\d+\\s*시간")
         // A place nearby reads in meters ("1분 350m").
-        val distance = labels.firstNotNullOfOrNull { Regex("\\d+(?:[.,]\\d+)?\\s*(?:km|㎞|m)(?![a-zA-Z])").find(it)?.value }
+        val distanceRx = Regex("\\d+(?:[.,]\\d+)?\\s*(?:km|㎞|m)(?![a-zA-Z])")
+        // Only the route itself counts: a result with both time and distance ("실시간 추천 16분 7.3km"), else
+        // the car tab once it shows a time ("자동차 16분 탭"). An ad on the map ("금토 밤 9시 50분 SBS") was
+        // once read as the travel time while the route had not loaded.
+        val route = labels.firstOrNull { timeRx.containsMatchIn(it) && distanceRx.containsMatchIn(it) }
+        val time = (route ?: labels.firstOrNull { Regex("^자동차\\s*.*\\d+\\s*분").containsMatchIn(it.trim()) })
+            ?.let { timeRx.find(it)?.value } ?: return null
+        val distance = route?.let { distanceRx.find(it)?.value }
         val place = chosenSpoken ?: answered.lastOrNull() ?: names.first()
         return "${place}까지 차로 약 ${time.replace(Regex("\\s+"), " ")}${distance?.let { ", $it" } ?: ""} 걸려요."
     }

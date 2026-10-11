@@ -8,24 +8,21 @@ package dev.localphone.core
  * the screen agent unchanged, as before.
  */
 object Intents {
-    const val SYSTEM = "사용자의 음성 명령이 무엇을 요청하는지 하나만 고른다. target과 app은 명령에 나온 말을 그대로 쓴다.\n" +
-        "intent: navigate(목적지로 길안내), eta(목적지까지 걸리는 시간), end_navigation(길안내 종료: 안내·길·내비를 말할 때만), " +
-        "close_app(앱 끄기·종료·닫기: app에 앱 이름, 말하지 않았으면 빈칸), " +
-        "play_song(특정 노래 재생), media(play/pause/next/previous: 음악 재생·멈춤·다음 곡·이전 곡), now_playing(지금 나오는 노래), " +
-        "playlist_add(재생목록에 노래 추가), playlist_remove(재생목록에서 노래 빼기), open_app(앱 열기), " +
-        "open_screen(앱 안의 화면·메뉴 열기), search(앱에서 검색), none(그 밖의 일)\n" +
-        "예:\n" +
-        "수요모임 가는 길 좀 알려줄래 → {\"intent\":\"navigate\",\"target\":\"수요모임\",\"app\":\"\"}\n" +
-        "회사 가려면 몇 분이나 걸려 → {\"intent\":\"eta\",\"target\":\"회사\",\"app\":\"\"}\n" +
-        "길 안내 이제 그만해 → {\"intent\":\"end_navigation\",\"target\":\"\",\"app\":\"\"}\n" +
-        "네이버 지도 이제 닫아줄래 → {\"intent\":\"close_app\",\"target\":\"\",\"app\":\"네이버 지도\"}\n" +
-        "더 크로스 노래 듣고 싶어 → {\"intent\":\"play_song\",\"target\":\"더 크로스\",\"app\":\"\"}\n" +
-        "노래 잠깐 멈춰봐 → {\"intent\":\"media\",\"target\":\"pause\",\"app\":\"\"}\n" +
-        "이거 무슨 노래야 → {\"intent\":\"now_playing\",\"target\":\"\",\"app\":\"\"}\n" +
-        "좋은날 플레이리스트에 넣어 → {\"intent\":\"playlist_add\",\"target\":\"좋은날\",\"app\":\"\"}\n" +
-        "설정 들어가서 와이파이 좀 보자 → {\"intent\":\"open_screen\",\"target\":\"와이파이\",\"app\":\"설정\"}\n" +
-        "네이버 지도에서 카페 좀 찾아봐 → {\"intent\":\"search\",\"target\":\"카페\",\"app\":\"네이버 지도\"}\n" +
-        "카카오톡에서 엄마한테 온 메시지 읽어줘 → {\"intent\":\"none\",\"target\":\"\",\"app\":\"\"}"
+    // Kept short: it is decoded cold whenever the model was not in memory (510 tokens took 7 s). The JSON
+    // shape comes from the grammar, so the examples only show intent | target | app.
+    const val SYSTEM = "음성 명령이 요청하는 일 하나를 고른다. target·app은 명령에 나온 말 그대로, 없으면 빈칸.\n" +
+        "navigate 길안내, eta 걸리는 시간, end_navigation 길안내 종료(안내·내비를 말할 때만), close_app 앱 닫기, " +
+        "play_song 노래 재생, media play/pause/next/previous, now_playing 지금 노래, playlist_add/playlist_remove 재생목록, " +
+        "open_app 앱 열기, open_screen 앱 안 화면, search 앱에서 검색, none 그 밖\n" +
+        "수요모임 가는 길 좀 알려줄래 → navigate|수요모임|\n" +
+        "회사 가려면 몇 분이나 걸려 → eta|회사|\n" +
+        "길 안내 이제 그만해 → end_navigation||\n" +
+        "네이버 지도 이제 닫아줄래 → close_app||네이버 지도\n" +
+        "더 크로스 노래 듣고 싶어 → play_song|더 크로스|\n" +
+        "노래 잠깐 멈춰봐 → media|pause|\n" +
+        "설정 들어가서 와이파이 좀 보자 → open_screen|와이파이|설정\n" +
+        "네이버 지도에서 카페 좀 찾아봐 → search|카페|네이버 지도\n" +
+        "카카오톡에서 엄마한테 온 메시지 읽어줘 → none||"
 
     private val names = listOf("navigate", "eta", "end_navigation", "close_app", "play_song", "media", "now_playing",
         "playlist_add", "playlist_remove", "open_app", "open_screen", "search", "none")

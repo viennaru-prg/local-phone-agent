@@ -8,8 +8,8 @@ android {
         applicationId = "dev.localphone.agent"
         minSdk = 30
         targetSdk = 35
-        versionCode = 108
-        versionName = "1.0.8"
+        versionCode = 109
+        versionName = "1.0.9"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         testApplicationId = "dev.localphone.agent.verification"
         ndk { abiFilters += listOf("arm64-v8a") }

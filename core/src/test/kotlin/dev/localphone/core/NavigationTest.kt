@@ -282,6 +282,117 @@ class NavigationTest {
             assertTrue(s.observe(navView("안내 종료")).complete, goal)
         }
     }
+    /**
+     * A NAVER screen as the phone reads it: [top] in the top bar (zone 상단), [rows] below. "btn:" makes a
+     * button, "in:hint=value" a text field, "frequents:a|b" the sideways list of saved places.
+     */
+    private fun naver(top: List<String>, rows: List<String>): ScreenView {
+        val nodes = mutableListOf(RawNode("r", -1, bounds = Bounds(0, 0, 1000, 2000)))
+        fun add(spec: String, top: Int, left: Int = 0, right: Int = 1000) {
+            val b = Bounds(left, top, right, top + 80)
+            when {
+                spec.startsWith("btn:") -> nodes += RawNode("r.${nodes.size}", 0, text = spec.removePrefix("btn:"), className = "android.widget.Button", clickable = true, bounds = b)
+                spec.startsWith("in:") -> spec.removePrefix("in:").split("=").let { (hint, value) ->
+                    nodes += RawNode("r.${nodes.size}", 0, text = value, hint = hint, editable = true, clickable = true, bounds = b) }
+                spec.startsWith("frequents:") -> {
+                    val list = nodes.size
+                    nodes += RawNode("r.$list", 0, viewId = "com.nhn.android.nmap:id/v_frequents_recycler_view", scrollable = true, bounds = b)
+                    spec.removePrefix("frequents:").split("|").forEachIndexed { i, p ->
+                        nodes += RawNode("r.$list.$i", list, text = p, clickable = true, bounds = Bounds(i * 250, top, i * 250 + 240, top + 80)) }
+                }
+                else -> nodes += RawNode("r.${nodes.size}", 0, text = spec, clickable = true, bounds = b)
+            }
+        }
+        top.forEachIndexed { i, spec -> add(spec, 20, i * 300, i * 300 + 280) }
+        rows.forEachIndexed { i, spec -> add(spec, 400 + i * 100) }
+        return ScreenCompactor.compact(Snapshot(NavigationSession.NAVER_MAP, "네이버지도", nodes, 1000, 2000))
+    }
+    private fun label(view: ScreenView, action: AgentAction?) = (action as? AgentAction.Click)?.let { view.element(it.id)?.label }
+
+    /** "수요모임으로 안내할까요?" was left on screen; the next command "일요모임으로 안내해 줘" must not start it. */
+    private val otherRoute get() = naver(listOf("경기 수원시 팔달구 고매로20번길 13-1", "btn:닫기"),
+        listOf("경기 수원시 영통구 봉영로1517번길 73", "자동차 21분 탭 21분", "실시간 추천 21분 8.2km 통행료 0원", "나중에 출발", "안내시작"))
+
+    @Test fun aRoutePreviewLeftByAnEarlierCommandIsClosedNotStarted() {
+        val s = NavigationSession.forGoal("일요모임으로 안내해 줘")!!
+        val stale = otherRoute
+        s.observe(stale)
+        assertEquals("PREVIEW", s.evidence.state)
+        val start = stale.elements.first { s.isStart(it.label) }
+        assertTrue(s.forbids(stale, AgentAction.Click(start.id)), "the model may not start the earlier route")
+        val close = s.nextAction(stale, 0)?.action
+        assertEquals("닫기", label(stale, close))
+        s.recordAction(stale, close!!, true, 0)
+        // Back on the route screen: the saved place is picked as usual and its preview is this command's.
+        val entry = naver(listOf("내위치: 경기 수원시 팔달구 고매로20번길 13-1", "btn:닫기"), listOf("도착지 입력", "frequents:집|회사|수요모…|일요모…"))
+        s.observe(entry)
+        val pick = s.nextAction(entry, 0)?.action
+        assertEquals("일요모…", label(entry, pick))
+        s.recordAction(entry, pick!!, true, 0)
+        val own = naver(listOf("경기 수원시 팔달구 고매로20번길 13-1", "btn:닫기"),
+            listOf("경기 수원시 권선구 세화로168번길 15", "자동차 9분 탭 9분", "실시간 추천 9분 1.2km 통행료 0원", "나중에 출발", "안내시작"))
+        s.observe(own)
+        assertFalse(s.forbids(own, AgentAction.Click(own.elements.first { s.isStart(it.label) }.id)))
+        assertEquals("안내시작", label(own, s.nextAction(own, 10_000)?.action))
+    }
+
+    @Test fun aPreviewTheModelReachedItselfIsNotClosed() {
+        val s = NavigationSession.forGoal("일요모임으로 안내해 줘")!!
+        val results = naver(listOf("btn:뒤로 (btn back)", "일요 모임"), listOf("일요 모임 카페 1.2km", "btn:길찾기"))
+        s.recordAction(results, AgentAction.Click(results.elements.first { it.label == "일요 모임 카페 1.2km" }.id), true, 0)
+        val preview = otherRoute
+        s.observe(preview)
+        assertFalse(s.forbids(preview, AgentAction.Click(preview.elements.first { s.isStart(it.label) }.id)))
+        assertNotEquals("닫기", label(preview, s.nextAction(preview, 0)?.action))
+    }
+
+    @Test fun searchResultsLeftByAMisheardNameAreLeftNotRouted() {
+        // "다시 모임" was typed and the run stopped; the result's own 길찾기 would set that place.
+        val s = NavigationSession.forGoal("일요모임으로 안내해 줘")!!
+        val results = naver(listOf("btn:뒤로 (btn back)", "다시 모임", "btn:닫기"),
+            listOf("현재 지도 중심", "다시모임 노래방 3km 노래방 경기도 수원시", "btn:길찾기"))
+        s.observe(results)
+        assertEquals("뒤로 (btn back)", label(results, s.nextAction(results, 0)?.action))
+        // A place page / confirm sheet from before: back as well, never its 확인.
+        val confirm = naver(listOf("btn:뒤로 가기", "다시모임 노래방"), listOf("다시모임 노래방 경기도 수원시", "확인"))
+        s.observe(confirm)
+        assertEquals("뒤로 가기", label(confirm, s.nextAction(confirm, 0)?.action))
+        // The map's own search with "카페" still in its box: no labelled way back, the back key closes it.
+        val search = naver(listOf("in:=카페"), listOf("카페 예약 검색으로 이동", "대형카페", "근처카페", "키즈카페"))
+        s.observe(search)
+        assertEquals(AgentAction.Back, s.nextAction(search, 0)?.action)
+        // The map itself is never backed out of.
+        val map = naver(listOf("네이버지도 검색", "길찾기", "음성 검색"), listOf("음식점", "카페"))
+        s.observe(map)
+        assertEquals("길찾기", label(map, s.nextAction(map, 0)?.action))
+    }
+
+    @Test fun aDestinationSearchLeftWithOtherTextIsRetypedWithTheName() {
+        AppProfiles.learn(NavigationSession.NAVER_MAP, "frequents", "집|회사|수요모…|일요모…|수원집")
+        val s = NavigationSession.forGoal("이담한정식으로 안내해 줘")!!
+        val search = naver(listOf("in:도착지 입력=이담 한 정식집", "btn:뒤로 가기"), listOf("frequents:집|회사|수요모…|일요모…", "경기 수원시 권선구 세화로168번길 15 10.10."))
+        s.observe(search)
+        val type = s.nextAction(search, 0)?.action
+        assertTrue(type is AgentAction.Type && type.text == "이담한정식", "$type")
+    }
+
+    @Test fun theMapsOwnRouteEntryIsStillOpenedFromTheMap() {
+        val s = NavigationSession.forGoal("일요모임으로 안내해 줘")!!
+        val map = naver(listOf("네이버지도 검색", "길찾기", "음성 검색"), listOf("음식점", "카페"))
+        s.observe(map)
+        assertEquals("길찾기", label(map, s.nextAction(map, 0)?.action))
+    }
+
+    @Test fun wordsAroundTheNameAreNotPartOfIt() {
+        assertEquals("일요모임", ShortcutGoals.navigationTarget("다시 일요모임으로 안내해줘"))
+        assertEquals("수요모임", ShortcutGoals.navigationTarget("아니 수요모임으로 좀 가줘"))
+        assertEquals("회사", ShortcutGoals.navigationTarget("그럼 회사로 다시 안내해 줘"))
+        assertEquals("종로", ShortcutGoals.navigationTarget("종로로 안내해줘"))
+        assertEquals("다시마식당", ShortcutGoals.navigationTarget("다시마식당으로 안내해줘"))
+        assertNull(ShortcutGoals.navigationTarget("다시 안내해줘"))
+        assertTrue(GoalText.missingDestination("다시 안내해줘"))
+    }
+
     private class NavPhone(val scope: TestScope, val ignoreClick: Boolean = false, val ignoreTap: Boolean = false,
                            val textStart: Boolean = false) : Phone {
         var driving = false; var clicks = 0; var taps = 0

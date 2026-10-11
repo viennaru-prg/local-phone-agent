@@ -18,6 +18,20 @@ class ConversationMemoryTest {
         assertEquals("수요모임까지 얼마나 걸려", rewritten("아까 거기까지 얼마나 걸려"))
     }
 
+    @Test fun aRouteStoppedHalfWayIsAskedForAgain() {
+        memory.attempted("일요 모임으로 안내해 줘")
+        assertEquals("일요 모임으로 안내해줘", rewritten("다시 안내해줘"))
+        assertEquals("일요 모임으로 안내해줘", rewritten("이어서 길안내 해줘"))
+        // Ending guidance or naming a new place is not a resume.
+        assertEquals(ConversationMemory.Resolution.Same, memory.resolve("안내 다시 종료해줘"))
+        assertEquals(ConversationMemory.Resolution.Same, memory.resolve("다시 회사로 안내해줘"))
+        // The place it was finally driven to replaces the name as heard.
+        memory.observe("위로 모임으로 안내해 줘", done("수요모임으로 안내를 시작했어요."))
+        assertEquals("수요모임으로 안내해줘", rewritten("다시 안내해 줘"))
+        clock += 6 * 60_000L
+        assertEquals(ConversationMemory.Resolution.Same, memory.resolve("다시 안내해줘"))
+    }
+
     @Test fun aSongJustAnsweredIsThatSong() {
         memory.observe("지금 나오는 노래 뭐야", done("지금 '더 크로스' 나오고 있어요."))
         assertEquals("더 크로스 재생목록에 추가해줘", rewritten("그 노래 재생목록에 추가해줘"))

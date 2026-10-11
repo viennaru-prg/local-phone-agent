@@ -14,8 +14,15 @@ object ShortcutGoals {
         if (GoalScope.multiple(goal)) return null
         val text = body(goal)
         if (qualified.containsMatchIn(text)) return null
-        return navigation.matchEntire(text)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() && it.length <= 50 }
+        val said = navigation.matchEntire(text)?.groupValues?.get(1)?.trim() ?: return null
+        // "다시 일요모임으로 안내해줘", "아니 수요모임으로 좀 가줘": the words around the name are not part of it
+        // (the map was once searched for "다시 일요모임").
+        var place = said.replace(fillerLead, "")
+        fillerTrail.find(place)?.let { place = place.substring(0, it.range.first).replace(Regex("(?:으로|로|까지|에)$"), "") }
+        return place.trim().takeIf { it.isNotEmpty() && it.length <= 50 }
     }
+    private val fillerLead = Regex("^(?:(?:다시\\s*한\\s*번|한\\s*번\\s*더|다시|그럼|그러면|그냥|이번엔|이번에는|아니요|아니야|아뇨|아니|지금|빨리|얼른|계속|이어서|일단|우선|좀)(?:[,\\s]+|$))+")
+    private val fillerTrail = Regex("\\s+(?:좀|다시|한\\s*번|빨리|얼른)$")
 
     /** An explicit screen-opening request, not every sentence containing '보여/화면'. */
     fun screenName(goal: String): String? {

@@ -45,6 +45,16 @@ class ConversationMemory(private val now: () -> Long = System::currentTimeMillis
             ?.takeIf { !refersToSong(it) }?.let { rememberSong(it) }
     }
 
+    /**
+     * A route asked for, before it runs: if it is stopped half way (wrong place typed, cancelled), "다시
+     * 안내해줘" goes there again. A finished one replaces it with the name it was driven to.
+     */
+    @Synchronized fun attempted(command: String) {
+        (ShortcutGoals.navigationTarget(command)?.takeIf { !GoalText.missingDestination(command) } ?: QuickCommands.etaTarget(command))
+            ?.takeIf { it.isNotBlank() && !refersToPlace(it) }?.let { rememberPlace(it) }
+    }
+
+    private val resume = Regex("다시|계속|이어서|아까|하던")
     private val placeRef = Regex("(아까\\s*)?(거기|그곳|그\\s*(?:장소|곳|가게|식당|매장|집))(으로|로|까지|에|를|을)?")
     private val songRef = Regex("(그|이|방금|아까)\\s*(노래|곡)")
     private val alarmRef = Regex("(그|이|방금|아까)\\s*알람")
@@ -68,6 +78,13 @@ class ConversationMemory(private val now: () -> Long = System::currentTimeMillis
             }
         }
         if (Regex("알람|거\\s|것\\s").containsMatchIn("$g ") && (fresh(Kind.ALARM) != null || alarmList != null)) alarm(g)?.let { return it }
+        // "다시 안내해줘" after a route was stopped half way (cancelled, misheard): the place last asked for.
+        if (resume.containsMatchIn(g) && Regex("안내|길\\s*찾|데려다|가\\s*줘|가자").containsMatchIn(g) &&
+            !Regex("종료|그만|꺼|끝|취소|멈춰").containsMatchIn(g) && GoalText.missingDestination(g)) {
+            fresh(Kind.PLACE)?.value?.takeIf { it.isNotBlank() }?.let { place ->
+                return Resolution.Rewritten("${withRo(place)} 안내해줘", "다시 → $place")
+            }
+        }
         placeRef.find(g)?.let { m ->
             val place = fresh(Kind.PLACE)?.value ?: return Resolution.Unclear("어느 곳을 말씀하시는지 장소 이름으로 다시 말씀해 주세요.")
             val particle = when (m.groupValues[3]) { "으로", "로" -> withRo(place); "" -> place; else -> place + m.groupValues[3] }

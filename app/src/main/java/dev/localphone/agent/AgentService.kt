@@ -186,6 +186,8 @@ class AgentService : Service() {
                 }
                 val command = if (before.isEmpty()) understood(said) else said
                 val navigation = NavigationSession.forGoal(command, app.places.mentionedIn(command), heard) ?: NavigationSession.forEta(command, heard)
+                // Remembered before it runs: a route stopped half way is resumed by "다시 안내해줘".
+                if (navigation != null) memory.attempted(command)
                 val agent = Agent(app.llm, phone,
                     if (app.prefs.useRecipes) app.recipes else RecipeBook({ null }, {}),
                     { app.prefs.noteLines },

@@ -70,6 +70,14 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
     private var resultRouted = false
     private var resultConfirmed = false
 
+    /**
+     * A click or typing of this command that could have set a destination (the model's too). Until then
+     * whatever the map shows (a route preview, search results, a place page) was left by an earlier command.
+     */
+    private var acted = false
+    private var unwindSteps = 0
+    private var unwindClick: Pair<Int, Int>? = null
+
     private var confirmed = false
     /** A name the user gave when answering "…로 안내할까요?" with another place ("아니, 수요모임"). */
     private val answered = mutableListOf<String>()
@@ -181,6 +189,35 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
 
     private fun preview(view: ScreenView) = view.elements.any { isStart(it.label) }
 
+    /** The screen's own way back at its top (NAVER: 닫기 on route screens, 뒤로 on search and place pages). */
+    private fun backControl(view: ScreenView): Element? = view.elements.firstOrNull { e ->
+        e.enabled && e.kind != Kind.TEXT && e.zone == "상단" &&
+            Regex("^(?:뒤로(?:\\s*가기)?|닫기|이전)(?:\\s*\\(.*\\))?$").matches(e.label.trim())
+    }
+
+    /**
+     * A route preview this command did not open: left by an earlier one ("수요모임으로 안내할까요?" asked,
+     * then "일요모임으로 안내해 줘" said). The model once pressed its 안내시작. A deep link's own preview
+     * (the screen changed after dispatch) is not stale.
+     */
+    private fun stalePreview(view: ScreenView) = preview(view) && !destinationBound && !targetPicked && !resultRouted && !acted &&
+        (!dispatched || initialSignature == view.signature)
+
+    /** Starting a route left by an earlier command is never this command's guidance. */
+    fun forbids(view: ScreenView, action: AgentAction): Boolean =
+        action is AgentAction.Click && view.element(action.id)?.let { isStart(it.label) } == true && stalePreview(view)
+
+    private fun unwind(view: ScreenView, reason: String): Harness.Auto? {
+        if (unwindSteps >= 4) return null
+        val back = backControl(view)
+        // The map's own search left open ("카페" in its box, suggestions below) has no labelled way back:
+        // the system back key closes it (first the keyboard). Never on a screen without a text field,
+        // where back could leave the app (the map's home, a splash).
+        if (back == null) return if (view.inputs.any { it.enabled }) { unwindSteps++; Harness.Auto(AgentAction.Back, reason) } else null
+        unwindSteps++; unwindClick = view.signature to back.id
+        return Harness.Auto(AgentAction.Click(back.id), reason)
+    }
+
     fun observe(view: ScreenView): NavigationEvidence {
         fun result(state: String, reason: String, done: Boolean = false): NavigationEvidence =
             NavigationEvidence(done, state, reason).also { evidence = it }
@@ -191,7 +228,9 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
         }) return result("PROMPT", "잠금·이전 경로·안내 확인 창이 남아 있음")
         val destination = view.elements.mapNotNull { e ->
             Regex("^(?:도착지|목적지)\\s*[:：]\\s*(.+)$").find(e.label)?.groupValues?.get(1)
-                ?: e.value.takeIf { it.isNotBlank() && Regex("도착지|목적지").containsMatchIn(e.label) }
+                ?: e.value.takeIf { it.isNotBlank() && Regex("도착지|목적지").containsMatchIn(e.label) &&
+                    // Text left in the destination search box is a draft, not a set destination: it is retyped.
+                    (e.kind != Kind.INPUT || preview(view)) }
         }
         if (destination.isNotEmpty() && destination.none(::matches)) {
             destinationBound = false; targetPicked = false
@@ -257,9 +296,15 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
                 ?.let { resultRouted = true; return Harness.Auto(AgentAction.Click(it.id), "검색 결과 '${target.label.take(20)}'을 도착지로 길찾기") }
             if (target != null) return Harness.Auto(AgentAction.Click(target.id),
                 if (chosen != null) "모델이 고른 저장 장소 '${target.label}'" else "현재 지도에서 요청한 목적지 항목이 하나로 확인됨")
+            // Search results, a place page or a confirm sheet left by an earlier command (a misheard name
+            // typed, then stopped): nothing here is this command's place. Their 길찾기 / 확인 would set the
+            // wrong destination, so step back to the map or the route screen and start from there.
+            if (hits.isEmpty() && !targetPicked && !resultRouted && !nameTyped && !targetSearchOpened && !acted && !dispatched &&
+                placeCarousel(view) == null) unwind(view, "이전 명령이 남긴 검색·장소 화면을 닫고 처음부터 찾기")?.let { return it }
             // Home/work and frequent destinations are listed behind the app's route entry (NAVER: 길찾기):
-            // open it first. The map's own sideways lists (category chips) are not places.
-            if (hits.isEmpty() && !targetPicked) app.routeEntry?.let { entry -> view.elements.singleOrNull {
+            // open it first. The map's own sideways lists (category chips) are not places, and a search
+            // result's own 길찾기 (a page with a way back at the top) is not the entry.
+            if (hits.isEmpty() && !targetPicked && backControl(view) == null) app.routeEntry?.let { entry -> view.elements.singleOrNull {
                 it.enabled && it.kind != Kind.TEXT && GoalText.normalize(it.label) == GoalText.normalize(entry)
             } }?.let { return Harness.Auto(AgentAction.Click(it.id), "${it.label}의 집·회사·자주 가는 곳을 먼저 확인") }
             // A sideways list of places (NAVER: 집, 회사, 수요모…, 일요모…) shows a few at a time: page through it.
@@ -296,7 +341,9 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
             // by name). The result named so is then pressed like a frequent place.
             if (choiceAsked && chosen == null && !targetPicked && searchSteps < 4) {
                 val input = view.inputs.firstOrNull { it.enabled }
-                if (input != null && !nameTyped && targetSearchOpened) {
+                // The destination search may be left open by an earlier command, with its text: typing replaces it.
+                if (input != null && !nameTyped && (targetSearchOpened || placeCarousel(view) != null ||
+                        Regex("도착지|목적지").containsMatchIn(input.label))) {
                     nameTyped = true; searchSteps++
                     return Harness.Auto(AgentAction.Type(input.id, names.first(), true), "자주 가는 곳에 없는 '${names.first()}'을 도착지로 검색")
                 }
@@ -306,6 +353,7 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
             }
             return null
         }
+        if (stalePreview(view)) return unwind(view, "이전 명령이 남긴 다른 경로 미리보기를 닫고 목적지부터 다시 고름")
         if (!destinationBound) return null
         // A travel-time question stops at the preview (etaAnswer). The route list draws a moment after the
         // preview itself: wait for its time instead of handing the half-drawn screen to the model.
@@ -332,6 +380,8 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
 
     fun recordAction(view: ScreenView, action: AgentAction, accepted: Boolean, now: Long) {
         if (view.snapshot.packageName != app.packageName) return
+        if (accepted && (action is AgentAction.Click || action is AgentAction.LongClick || action is AgentAction.Type) &&
+            !(action is AgentAction.Click && unwindClick == view.signature to action.id)) acted = true
         if (action is AgentAction.Click) {
             val label = view.element(action.id)?.label.orEmpty()
             val entry = app.routeEntry?.let { GoalText.normalize(label) == GoalText.normalize(it) } == true

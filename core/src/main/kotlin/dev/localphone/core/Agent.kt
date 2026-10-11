@@ -378,7 +378,9 @@ class Agent(
             val deadEnds = run.tried[fingerprint].orEmpty()
             val excluded = view.elements.filter { e ->
                 (run.ineffective[fingerprint to "click \"${e.label}\""] ?: 0) > 0 || "click \"${e.label}\"" in deadEnds ||
-                    Guard.blocked(goal, AgentAction.Click(e.id), view) != null
+                    Guard.blocked(goal, AgentAction.Click(e.id), view) != null ||
+                    // 안내시작 on a route an earlier command left open drove to the wrong place.
+                    navigation?.forbids(view, AgentAction.Click(e.id)) == true
             }.map { it.id }.toSet()
             if (deadEnds.isNotEmpty() && run.history.lastOrNull()?.action != "다시 온 화면") run.history += HistoryLine("다시 온 화면",
                 "이미 열어 본 ${deadEnds.joinToString(", ") { it.removePrefix("click ") }}에는 답이 없었음. 다른 항목·scroll·검색을 시도")

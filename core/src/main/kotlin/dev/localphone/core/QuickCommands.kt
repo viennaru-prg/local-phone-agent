@@ -18,7 +18,7 @@ sealed interface QuickRequest {
     data class AlarmIn(val minutes: Int) : QuickRequest
     /** "내일 부산 비 와?": [place] null means where the phone is. */
     data class Weather(val day: WeatherDay, val place: String?, val focus: WeatherFocus, val part: DayPart? = null,
-                       val allDay: Boolean = false) : QuickRequest
+                       val allDay: Boolean = false, val compare: WeatherCompare = WeatherCompare.NONE) : QuickRequest
 }
 
 object QuickCommands {

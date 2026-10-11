@@ -199,18 +199,36 @@ class AndroidTools(private val context: Context, private val phone: AndroidPhone
             Triple(here.latitude, here.longitude, locality(here.latitude, here.longitude))
         }
         val la = "%.2f".format(Locale.US, lat); val lo = "%.2f".format(Locale.US, lng)
-        val forecast = runCatching { fetch("https://api.open-meteo.com/v1/forecast?latitude=$la&longitude=$lo" + Weather.FIELDS) }
+        val past = Weather.pastDays(request)
+        val forecast = runCatching { fetch("https://api.open-meteo.com/v1/forecast?latitude=$la&longitude=$lo" + Weather.FIELDS +
+            if (past > 0) "&past_days=$past" else "") }
             .getOrNull() ?: return@withContext "날씨 정보를 받지 못했어요. 인터넷 연결을 확인해 주세요."
         val air = if (request.focus == WeatherFocus.DUST)
             runCatching { fetch("https://air-quality-api.open-meteo.com/v1/air-quality?latitude=$la&longitude=$lo&current=pm10,pm2_5&timezone=auto") }.getOrNull()
         else null
-        runCatching { Weather.say(request, Weather.report(forecast, air), placeName, java.time.LocalDate.now(), java.time.LocalTime.now().hour) }
+        // The normal (30 years around this date) and last year's same date come from the archive.
+        val today = java.time.LocalDate.now()
+        val target = when (request.day) { WeatherDay.TOMORROW -> today.plusDays(1); WeatherDay.DAY_AFTER -> today.plusDays(2); else -> today }
+        val archive = "https://archive-api.open-meteo.com/v1/archive?latitude=$la&longitude=$lo&timezone=auto"
+        val normal = if (request.compare == WeatherCompare.NORMAL) runCatching {
+            // 30 years of daily means (~190 KB, ~5 s) do not change: kept per place after the first answer.
+            val cache = java.io.File(context.cacheDir, "normals-$la-$lo-${today.year}.json")
+            val series = cache.takeIf { it.isFile }?.readText()
+                ?: fetch("$archive&start_date=${today.year - 30}-01-01&end_date=${today.year - 1}-12-31&daily=temperature_2m_mean", 15_000)
+                    .also { cache.writeText(it) }
+            Weather.normal(series, target)
+        }.getOrNull() else null
+        val lastYear = if (request.compare == WeatherCompare.LAST_YEAR) runCatching {
+            val d = target.minusYears(1)
+            Weather.archiveDay(fetch("$archive&start_date=$d&end_date=$d&daily=temperature_2m_mean,temperature_2m_max,temperature_2m_min"))
+        }.getOrNull() else null
+        runCatching { Weather.say(request, Weather.report(forecast, air).copy(normal = normal, lastYear = lastYear), placeName, today, java.time.LocalTime.now().hour) }
             .onFailure { Log.w(TAG, "weather", it) }.getOrDefault("날씨 정보를 읽지 못했어요.")
     }
 
-    private fun fetch(url: String): String {
+    private fun fetch(url: String, timeoutMs: Int = 5_000): String {
         val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-        c.connectTimeout = 5_000; c.readTimeout = 5_000
+        c.connectTimeout = timeoutMs; c.readTimeout = timeoutMs
         return try { c.inputStream.bufferedReader().use { it.readText() } } finally { c.disconnect() }
     }
 

@@ -30,6 +30,8 @@ jobs:
         if: always()
         with:
           name: check-results
+          retention-days: 7
+          compression-level: 9
           path: |
             core/build/reports/tests/test/
             app/build/reports/lint-results-debug.*

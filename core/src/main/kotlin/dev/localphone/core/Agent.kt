@@ -107,6 +107,7 @@ class Agent(
     }
 
     private suspend fun verify(goal: String, run: Run, view: ScreenView, answer: String = ""): Verdict {
+        if (NavigationPopup.find(view.snapshot,goal) != null) return Verdict(false,"광고 팝업이 남아 있음")
         mediaEvidence(goal, run, view)?.let { return Verdict(true, it) }
         playlistEvidence(goal, run, view)?.let { return Verdict(true, it) }
         GoalText.playSong(goal)?.let { q ->
@@ -232,6 +233,7 @@ class Agent(
         if (previous.isEmpty() && GoalText.isChatter(goal))
             return AgentResult(Outcome.FAILED, "할 일을 알아듣지 못했어요. 다시 말씀해 주세요.", run.history)
         var view = observe(run) ?: return fail(run, "화면을 읽을 수 없습니다. 접근성 서비스가 켜져 있는지 확인해 주세요.")
+        val popups = NavigationPopupHandler(phone,goal,listener,navigation?.popupState ?: PopupDismissState())
         // The user answered "…로 안내할까요?": yes drives to the asked place, a name looks for that one.
         if (navigation != null) {
             val askedAt = run.history.indexOfLast { it.action == "목적지 확인 질문" }
@@ -261,15 +263,25 @@ class Agent(
             view = next
         }
 
+        when (val popup = popups.handle(view)) {
+            NavigationPopupHandler.Result.None -> Unit
+            is NavigationPopupHandler.Result.Cleared -> { view = popup.view; run.history += popup.history }
+            is NavigationPopupHandler.Result.Failed -> return fail(run,popup.message)
+        }
         if (previous.isEmpty()) recipes.find(goal)?.let { recipe ->
             listener.progress("기억한 방법으로 실행 중…")
-            view = replay(run, recipe, view)
+            view = replay(run, recipe, view, popups)
         }
 
         var index = run.history.size
         while (index < config.maxSteps) {
             currentCoroutineContext().ensureActive()
             index++
+            when (val popup = popups.handle(view)) {
+                NavigationPopupHandler.Result.None -> Unit
+                is NavigationPopupHandler.Result.Cleared -> { view = popup.view; run.history += popup.history; continue }
+                is NavigationPopupHandler.Result.Failed -> return fail(run,popup.message)
+            }
             navigation?.observe(view)?.takeIf { it.complete }?.let {
                 listener.step(StepRecord(index, "navigation", view.render(), "", "verify", "완료", it.reason, 0, phone.now() - started))
                 return finish(run, goal, navigation?.spokenStart ?: "길안내를 시작했어요.")
@@ -404,6 +416,7 @@ class Agent(
             }
             run.badOutput = 0
             val liveView = observe(run) ?: view
+            if (NavigationPopup.find(liveView.snapshot,goal) != null) { view = liveView; continue }
             // A lock screen that appeared meanwhile (Secure Folder pattern, shown by Settings) is not a
             // foreign app: hand it to the unlock request at the top of the loop.
             if (Harness.authScreen(liveView)) { view = liveView; continue }
@@ -474,6 +487,7 @@ class Agent(
      */
     private suspend fun checkFinished(goal: String, run: Run, action: AgentAction, view: ScreenView, outcome: String,
                                       next: ScreenView, index: Int, started: Long, semanticCheck: Boolean = false): AgentResult? {
+        if (NavigationPopup.find(next.snapshot,goal) != null) return null
         val label = when (action) { is AgentAction.Click -> view.element(action.id)?.label; else -> null }.orEmpty()
         val target = GoalText.targetWords(goal)
         // Pressing the requested tab and seeing nothing change usually means it was already open.
@@ -536,16 +550,23 @@ class Agent(
     }
 
     /** Replays recorded steps while each one resolves on the live screen. Returns the latest view. */
-    private suspend fun replay(run: Run, recipe: Recipe, start: ScreenView): ScreenView {
+    private suspend fun replay(run: Run, recipe: Recipe, start: ScreenView, popups: NavigationPopupHandler): ScreenView {
         var view = start
+        suspend fun clearPopup(): Boolean = when (val popup = popups.handle(view)) {
+            NavigationPopupHandler.Result.None -> true
+            is NavigationPopupHandler.Result.Cleared -> { view = popup.view; run.history += popup.history; true }
+            is NavigationPopupHandler.Result.Failed -> false
+        }
         var i = 0
         while (i < recipe.steps.size) {
             currentCoroutineContext().ensureActive()
+            if (!clearPopup()) return view
             Harness.preDecide(run.goal, view, run.history)?.let { auto ->
                 val (_, next) = execute(run, auto.action, view)
                 run.history[run.history.lastIndex] = run.history.last().copy(note = auto.reason)
                 view = next
             }
+            if (!clearPopup()) return view
             val step = recipe.steps[i]
             var action = RecipeRecorder.toAction(step, view)
             // Screens can still be loading after the previous step; give the label a moment to appear.
@@ -553,6 +574,7 @@ class Agent(
             var ahead = -1
             while (action == null && phone.now() < deadline) {
                 delay(config.settlePollMs); view = observe(run) ?: return view
+                if (!clearPopup()) return view
                 action = RecipeRecorder.toAction(step, view)
                 // A recorded step that only appears sometimes (a pop-up) may be absent this time:
                 // if one of the next two steps is already on screen, skip ahead to it.
@@ -709,13 +731,17 @@ class Agent(
 
     private suspend fun observe(run: Run): ScreenView? {
         repeat(10) {
-            phone.observe()?.let { return ScreenCompactor.compact(it, run.goal, run.focus).also(run.facts::observe) }
+            phone.observe()?.let { return ScreenCompactor.compact(it, run.goal, run.focus).also {
+                if (NavigationPopup.find(it.snapshot,run.goal) == null) run.facts.observe(it)
+            } }
             delay(200)
         }
         if (!phone.leaveUnreadable()) return null
         run.history += HistoryLine("읽을 수 없는 화면", "보호된 화면이라 빠져나옴")
         repeat(10) {
-            phone.observe()?.let { return ScreenCompactor.compact(it, run.goal, run.focus).also(run.facts::observe) }
+            phone.observe()?.let { return ScreenCompactor.compact(it, run.goal, run.focus).also {
+                if (NavigationPopup.find(it.snapshot,run.goal) == null) run.facts.observe(it)
+            } }
             delay(200)
         }
         return null
@@ -798,6 +824,9 @@ object Guard {
         }
         val label = view.element(id)?.label.orEmpty()
         if (view.element(id)?.enabled != true) return "비활성 요소라 실행하지 않음"
+        NavigationPopup.find(view.snapshot,goal)?.let {
+            return if (action is AgentAction.Click && NavigationPopup.isClose(view,id)) null else "광고 팝업을 먼저 닫아야 하므로 실행하지 않음"
+        }
         if (protected.containsMatchIn(label)) return "보호된 동작이라 실행하지 않음"
         // Swapping origin and destination silently reverses a route the user asked for.
         if (swap.containsMatchIn(label) && !Regex("출발").containsMatchIn(goal)) return "출발지와 도착지를 바꾸는 버튼이라 누르지 않음"

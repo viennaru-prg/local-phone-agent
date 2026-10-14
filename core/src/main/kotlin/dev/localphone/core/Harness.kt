@@ -36,6 +36,7 @@ object Harness {
 
     /** Returns an action to take without the model, or null to let the model decide. */
     fun preDecide(goal: String, view: ScreenView, history: List<HistoryLine> = emptyList()): Auto? {
+        NavigationPopup.action(view,goal)?.let { return it }
         emptyScreen(view, history)?.let { return it }
         openAppIcon(goal, view, history)?.let { return it }
         mediaControl(goal, view, history)?.let { return it }

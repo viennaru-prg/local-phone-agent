@@ -84,6 +84,7 @@ object ScreenCompactor {
     fun compact(snapshot: Snapshot, goal: String = "", focus: String = ""): ScreenView {
         if (snapshot.home) return ScreenView(snapshot, emptyList())
         val nodes = snapshot.nodes
+        val popup = NavigationPopup.find(snapshot,goal)
         val children = Array(nodes.size) { mutableListOf<Int>() }
         nodes.forEachIndexed { index, node -> if (node.parent in nodes.indices) children[node.parent] += index }
         fun absorbs(n: RawNode) = n.clickable || n.longClickable || n.checkable || n.editable
@@ -109,7 +110,8 @@ object ScreenCompactor {
             return scrollers.any { s -> s > index && !isAncestor(index, s) && !isAncestor(s, index) &&
                 nodes[s].bounds.let { box -> b.centerY in box.top..box.bottom && b.centerX in box.left..box.right } }
         }
-        fun visible(n: RawNode, index: Int) = !n.bounds.empty && n.bounds.right > 0 && n.bounds.bottom > 0 &&
+        fun visible(n: RawNode, index: Int) = (popup == null || NavigationPopup.contains(snapshot, popup.container, index)) &&
+            !n.bounds.empty && n.bounds.right > 0 && n.bounds.bottom > 0 &&
             n.bounds.left < snapshot.width && n.bounds.top < snapshot.height && insideScrollers(index) && !covered(index)
         // A clickable container covering much of the screen is a panel, not a row: its texts stay separate.
         val panelArea = snapshot.width.toLong() * snapshot.height * 3 / 10
@@ -143,8 +145,8 @@ object ScreenCompactor {
                 node.editable -> drafts += Draft(index, Kind.INPUT, node.hint.ifBlank { node.desc }.ifBlank { idWord(node.viewId) },
                     if (node.text == node.hint) "" else node.text, null)
                 node.checkable -> drafts += Draft(index, Kind.SWITCH, join(node.ownLabel, mergedText(index)).ifBlank { idWord(node.viewId) }, "", node.checked)
-                node.clickable || node.longClickable -> {
-                    val label = join(node.ownLabel, mergedText(index)).ifBlank { idWord(node.viewId) }
+                node.clickable || node.longClickable || index == popup?.closeNode -> {
+                    val label = if (index == popup?.closeNode) "광고 닫기" else join(node.ownLabel, mergedText(index)).ifBlank { idWord(node.viewId) }
                     if (label.isNotEmpty()) drafts += Draft(index, if (isButton(node)) Kind.BUTTON else Kind.ITEM, label, "", null)
                 }
                 node.scrollable -> drafts += Draft(index, Kind.LIST, idWord(node.viewId), "", null)
@@ -186,6 +188,7 @@ object ScreenCompactor {
         val relevant = GoalText.targetWords(goal)
         val focused = GoalText.words(focus)
         fun priority(d: Draft): Int = when {
+            d.node == popup?.closeNode -> -2
             focused.isNotEmpty() && GoalText.matches(d.label + " " + d.value, focused) -> -1
             relevant.isNotEmpty() && GoalText.matches(d.label + " " + d.value, relevant) -> 0
             d.kind == Kind.INPUT || d.kind == Kind.SWITCH -> 1

@@ -46,6 +46,7 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
     private var chosen: String? = null
     private var chosenFull: String? = null
     var evidence = NavigationEvidence(false, "UNRESOLVED", "목적지를 아직 확인하지 못함"); private set
+    val popupState = PopupDismissState()
 
     fun beforeDispatch(view: ScreenView?) { initialSignature = view?.signature; dispatched = true }
 
@@ -116,6 +117,7 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
 
     /** The route preview's travel time and distance, said for [eta] questions ("회사까지 차로 약 21분, 7.3km예요"). */
     fun etaAnswer(view: ScreenView): String? {
+        if (NavigationPopup.find(view.snapshot) != null) return null
         if (!eta || evidence.state != "PREVIEW" || !destinationBound) return null
         val labels = view.elements.map { it.label }
         val timeRx = Regex("(\\d+\\s*시간\\s*)?\\d+\\s*분|\\d+\\s*시간")
@@ -222,6 +224,7 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
         fun result(state: String, reason: String, done: Boolean = false): NavigationEvidence =
             NavigationEvidence(done, state, reason).also { evidence = it }
         if (view.snapshot.packageName != app.packageName) return result("OTHER_APP", "내비게이션 앱 화면이 아님")
+        if (NavigationPopup.find(view.snapshot) != null) return result("AD_POPUP", "광고 팝업을 먼저 닫아야 함")
         val labels = view.elements.map { it.label }
         if (Harness.authScreen(view) || labels.any {
             Regex("이어서.*(?:받으|안내)|이전.*(?:안내|경로)|경로.*하시겠|안내.*할까요").containsMatchIn(it)
@@ -263,6 +266,7 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
 
     fun nextAction(view: ScreenView, now: Long): Harness.Auto? {
         if (view.snapshot.packageName != app.packageName) return null
+        NavigationPopup.action(view,goal)?.let { return it }
         if (!preview(view)) {
             // Guidance from before this command (its destination is not shown as "회사"): end it from the
             // drawer and start the requested route the normal way. Never for the route this run started.
@@ -380,6 +384,7 @@ class NavigationSession(val goal: String, private val names: List<String>, priva
 
     fun recordAction(view: ScreenView, action: AgentAction, accepted: Boolean, now: Long) {
         if (view.snapshot.packageName != app.packageName) return
+        if (action is AgentAction.Click && NavigationPopup.isClose(view, action.id)) return
         if (accepted && (action is AgentAction.Click || action is AgentAction.LongClick || action is AgentAction.Type) &&
             !(action is AgentAction.Click && unwindClick == view.signature to action.id)) acted = true
         if (action is AgentAction.Click) {
@@ -443,10 +448,16 @@ class NavigationDriver(private val phone: Phone, private val session: Navigation
     suspend fun confirm(timeoutMs: Long = 6000): Boolean {
         val started = phone.now()
         var lastState = ""
+        val popups = NavigationPopupHandler(phone,session.goal,listener,session.popupState)
         while (phone.now() - started < timeoutMs) {
             currentCoroutineContext().ensureActive()
             val view = phone.observe()?.let { ScreenCompactor.compact(it, session.goal) }
             if (view == null) { delay(150); continue }
+            when (popups.handle(view,minOf(3_000,timeoutMs-(phone.now()-started)))) {
+                NavigationPopupHandler.Result.None -> Unit
+                is NavigationPopupHandler.Result.Cleared -> continue
+                is NavigationPopupHandler.Result.Failed -> return false
+            }
             val evidence = session.observe(view)
             if (lastState != evidence.state) {
                 listener.step(StepRecord(0, "navigation", view.render(), "", "observe", evidence.state, evidence.reason, 0, phone.now() - started))
